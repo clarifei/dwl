@@ -10,7 +10,7 @@ primarily in terms of functionality, and secondarily in terms of
 philosophy. Like [dwm], dwl is:
 
 - Easy to understand, hack on, and extend with patches
-- One C source file (or a very small number) configurable via `config.h`
+- A small, domain-focused C source tree configurable via `config/config.def.h`
 - Tied to as few external dependencies as possible
 
 ## Getting Started:
@@ -55,10 +55,20 @@ version of [wlroots].
 
 To enable XWayland, you should uncomment its flags in `config.mk`.
 
+### Source layout
+
+`dwl.c` owns compositor state and assembles a unity build. Shared types and the
+internal function interface live in `include/dwl.h`; client and utility helpers
+are in `include/`. Implementations are grouped under `src/` by domain: clients,
+input, layouts, outputs, sessions, server lifecycle, and XWayland. The template
+and generated configuration live under `config/`; a root `config.h` remains a
+supported local override for existing setups.
+
 ## Configuration
 
-All configuration is done by editing `config.h` and recompiling, in the same
-manner as [dwm]. There is no way to separately restart the window manager in
+All configuration is done by editing `config/config.def.h` and recompiling, in
+the same manner as [dwm]. A root `config.h` overrides the generated template for
+existing setups. There is no way to separately restart the window manager in
 Wayland without restarting the entire display server, so any changes will take
 effect the next time dwl is executed.
 
@@ -76,10 +86,10 @@ otherwise you need to add yourself in the `seat` group and enable/start the
 seatd daemon.
 
 When dwl is run with no arguments, it will launch the server and begin handling
-any shortcuts configured in `config.h`. There is no status bar or other
+any shortcuts configured in `config/config.def.h`. There is no status bar or other
 decoration initially; these are instead clients that can be run within the
 Wayland session. Do note that the default background color is grey. This can be
-modified in `config.h`.
+modified in `config/config.def.h`.
 
 If you would like to run a script or command automatically at startup, you can
 specify the command using the `-s` option. This command will be executed as a
