@@ -5,14 +5,22 @@
 #ifndef DWL_H
 #define DWL_H
 
+#include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
+#include <limits.h>
 #include <libinput.h>
 #include <linux/input-event-codes.h>
 #include <math.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <strings.h>
 #include <sys/wait.h>
+#include <sys/inotify.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
 #include <wayland-server-core.h>
@@ -82,7 +90,8 @@
 #define VISIBLEON(C, M)         ((M) && (C)->mon == (M) && ((C)->tags & (M)->tagset[(M)->seltags]))
 #define LENGTH(X)               (sizeof X / sizeof X[0])
 #define END(A)                  ((A) + LENGTH(A))
-#define TAGMASK                 ((1u << TAGCOUNT) - 1)
+#define TAGCOUNT                (config.tagcount)
+#define TAGMASK                 ((1u << config.tagcount) - 1)
 #define LISTEN(E, L, H)         wl_signal_add((E), ((L)->notify = (H), (L)))
 #define LISTEN_STATIC(E, H)     do { struct wl_listener *_l = ecalloc(1, sizeof(*_l)); _l->notify = (H); wl_signal_add((E), _l); } while (0)
 
@@ -102,7 +111,7 @@ typedef struct {
 	unsigned int mod;
 	unsigned int button;
 	void (*func)(const Arg *);
-	const Arg arg;
+	Arg arg;
 } Button;
 
 typedef struct Monitor Monitor;
@@ -150,7 +159,7 @@ typedef struct {
 	uint32_t mod;
 	xkb_keysym_t keysym;
 	void (*func)(const Arg *);
-	const Arg arg;
+	Arg arg;
 } Key;
 
 typedef struct {
@@ -184,6 +193,7 @@ typedef struct {
 } LayerSurface;
 
 typedef struct {
+	char *name;
 	const char *symbol;
 	void (*arrange)(Monitor *);
 } Layout;
@@ -243,6 +253,51 @@ typedef struct {
 	struct wl_listener unlock;
 	struct wl_listener destroy;
 } SessionLock;
+
+typedef struct {
+	int sloppyfocus;
+	int bypass_surface_visibility;
+	unsigned int borderpx;
+	float rootcolor[4];
+	float bordercolor[4];
+	float focuscolor[4];
+	float urgentcolor[4];
+	float fullscreen_bg[4];
+	int tagcount;
+	enum wlr_log_importance log_level;
+
+	Rule *rules;
+	size_t rule_count;
+	Layout *layouts;
+	size_t layout_count;
+	MonitorRule *monrules;
+	size_t monrule_count;
+
+	struct xkb_rule_names xkb_rules;
+	int repeat_rate;
+	int repeat_delay;
+
+	int tap_to_click;
+	int tap_and_drag;
+	int drag_lock;
+	int natural_scrolling;
+	int disable_while_typing;
+	int left_handed;
+	int middle_button_emulation;
+	enum libinput_config_scroll_method scroll_method;
+	enum libinput_config_click_method click_method;
+	uint32_t send_events_mode;
+	enum libinput_config_accel_profile accel_profile;
+	double accel_speed;
+	enum libinput_config_tap_button_map button_map;
+
+	Key *keys;
+	size_t key_count;
+	Button *buttons;
+	size_t button_count;
+} Config;
+
+extern Config config;
 
 /* function declarations */
 static void applybounds(Client *c, struct wlr_box *bbox);
@@ -356,5 +411,12 @@ static Monitor *xytomon(double x, double y);
 static void xytonode(double x, double y, struct wlr_surface **psurface,
 		Client **pc, LayerSurface **pl, double *nx, double *ny);
 static void zoom(const Arg *arg);
+
+static int config_init(const char *path);
+static void config_watch_start(void);
+static void config_watch_stop(void);
+static void config_free(Config *cfg);
+static void config_reload(void);
+static void config_apply_live(const Config *old);
 
 #endif

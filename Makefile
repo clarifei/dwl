@@ -5,24 +5,23 @@ include config.mk
 
 # flags for compiling
 DWLCPPFLAGS = -I. -Iinclude -Iconfig -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L \
-	-DVERSION=\"$(VERSION)\" $(XWAYLAND)
+	-DVERSION=\"$(VERSION)\" -DDWL_SYSTEM_CONFIG=\"$(DATADIR)/dwl/config.lua\" $(XWAYLAND)
 DWLDEVCFLAGS = -g -Wpedantic -Wall -Wextra -Wdeclaration-after-statement \
 	-Wno-unused-parameter -Wshadow -Wunused-macros -Werror=strict-prototypes \
 	-Werror=implicit -Werror=return-type -Werror=incompatible-pointer-types \
 	-Wfloat-conversion
 
 # CFLAGS / LDFLAGS
-PKGS      = wayland-server xkbcommon libinput $(XLIBS)
+PKGS      = wayland-server xkbcommon libinput lua5.4 $(XLIBS)
 DWLCFLAGS = `$(PKG_CONFIG) --cflags $(PKGS)` $(WLR_INCS) $(DWLCPPFLAGS) $(DWLDEVCFLAGS) $(CFLAGS)
 LDLIBS    = `$(PKG_CONFIG) --libs $(PKGS)` $(WLR_LIBS) -lm $(LIBS)
 DWL_SRC   = dwl.c include/dwl.h include/client.h include/util.h src/client.c src/input.c src/layout.c \
-	src/output.c src/server.c src/session.c src/xwayland.c
-DWL_CONFIG_OVERRIDE = $(wildcard config.h)
+	src/output.c src/server.c src/session.c src/config.c src/xwayland.c
 
 all: dwl
 dwl: dwl.o util.o
 	$(CC) dwl.o util.o $(DWLCFLAGS) $(LDFLAGS) $(LDLIBS) -o $@
-dwl.o: $(DWL_SRC) $(DWL_CONFIG_OVERRIDE) config/config.h config/config.def.h config.mk cursor-shape-v1-protocol.h \
+dwl.o: $(DWL_SRC) config.mk cursor-shape-v1-protocol.h \
 	pointer-constraints-unstable-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h \
 	wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
 util.o: util.c include/util.h
@@ -49,10 +48,8 @@ xdg-shell-protocol.h:
 	$(WAYLAND_SCANNER) server-header \
 		$(WAYLAND_PROTOCOLS)/stable/xdg-shell/xdg-shell.xml $@
 
-config/config.h:
-	cp config/config.def.h $@
 clean:
-	rm -f dwl *.o *-protocol.h config/config.h
+	rm -f dwl *.o *-protocol.h
 
 dist: clean
 	mkdir -p dwl-$(VERSION)
@@ -67,6 +64,9 @@ install: dwl
 	rm -f $(DESTDIR)$(PREFIX)/bin/dwl
 	cp -f dwl $(DESTDIR)$(PREFIX)/bin
 	chmod 755 $(DESTDIR)$(PREFIX)/bin/dwl
+	mkdir -p $(DESTDIR)$(DATADIR)/dwl
+	cp -f config/config.lua $(DESTDIR)$(DATADIR)/dwl/config.lua
+	chmod 644 $(DESTDIR)$(DATADIR)/dwl/config.lua
 	mkdir -p $(DESTDIR)$(MANDIR)/man1
 	cp -f dwl.1 $(DESTDIR)$(MANDIR)/man1
 	chmod 644 $(DESTDIR)$(MANDIR)/man1/dwl.1
@@ -75,6 +75,7 @@ install: dwl
 	chmod 644 $(DESTDIR)$(DATADIR)/wayland-sessions/dwl.desktop
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/dwl $(DESTDIR)$(MANDIR)/man1/dwl.1 \
+		$(DESTDIR)$(DATADIR)/dwl/config.lua \
 		$(DESTDIR)$(DATADIR)/wayland-sessions/dwl.desktop
 
 .SUFFIXES: .c .o

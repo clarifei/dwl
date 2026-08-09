@@ -4,6 +4,7 @@
 void
 cleanup(void)
 {
+	config_watch_stop();
 	cleanuplisteners();
 #ifdef XWAYLAND
 	wlr_xwayland_destroy(xwayland);
@@ -26,6 +27,7 @@ cleanup(void)
 	/* Destroy after the wayland display (when the monitors are already destroyed)
 	   to avoid destroying them with an invalid scene output. */
 	wlr_scene_node_destroy(&scene->tree.node);
+	config_free(&config);
 }
 
 void
@@ -176,7 +178,7 @@ setup(void)
 	for (i = 0; i < (int)LENGTH(sig); i++)
 		sigaction(sig[i], &sa, NULL);
 
-	wlr_log_init(log_level, NULL);
+	wlr_log_init(config.log_level, NULL);
 
 	/* The Wayland display is managed by libwayland. It handles accepting
 	 * clients from the Unix socket, managing Wayland globals, and so on. */
@@ -192,7 +194,7 @@ setup(void)
 
 	/* Initialize the scene graph used to lay out windows */
 	scene = wlr_scene_create();
-	root_bg = wlr_scene_rect_create(&scene->tree, 0, 0, rootcolor);
+	root_bg = wlr_scene_rect_create(&scene->tree, 0, 0, config.rootcolor);
 	for (i = 0; i < NUM_LAYERS; i++)
 		layers[i] = wlr_scene_tree_create(&scene->tree);
 	drag_icon = wlr_scene_tree_create(&scene->tree);
@@ -389,6 +391,7 @@ setup(void)
 		fprintf(stderr, "failed to setup XWayland X server, continuing without it\n");
 	}
 #endif
+	config_watch_start();
 }
 
 void

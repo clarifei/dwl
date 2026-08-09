@@ -8,6 +8,7 @@
 .Nm
 .Op Fl v
 .Op Fl d
+.Op Fl c Ar config path
 .Op Fl s Ar startup command
 .Sh DESCRIPTION
 .Nm
@@ -29,6 +30,14 @@ option,
 enables full wlroots logging, including debug information.
 .Pp
 When given the
+.Fl c
+option,
+.Nm
+loads the Lua configuration from
+.Ar config path
+instead of the default search path.
+.Pp
+When given the
 .Fl s
 option,
 .Nm
@@ -39,10 +48,13 @@ When stopping, it sends
 .Dv SIGTERM
 to the child process group and waits for it to exit.
 .Pp
-Users are encouraged to customize
+Users customize
 .Nm
-by editing the sources, in particular
-.Pa config/config.def.h .
+by editing the Lua file
+.Pa config/config.lua .
+The file is watched while
+.Nm
+is running and valid changes are applied without rebuilding or restarting.
 The default key bindings are as follows:
 .Bl -tag -width 20n -offset indent -compact
 .It Mod-[1-9]

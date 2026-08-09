@@ -55,7 +55,7 @@ createnotifyx11(struct wl_listener *listener, void *data)
 	c = xsurface->data = ecalloc(1, sizeof(*c));
 	c->surface.xwayland = xsurface;
 	c->type = X11;
-	c->bw = client_is_unmanaged(c) ? 0 : borderpx;
+	c->bw = client_is_unmanaged(c) ? 0 : config.borderpx;
 
 	/* Listen to the various events it can emit */
 	LISTEN(&xsurface->events.associate, &c->associate, associatex11);
@@ -88,7 +88,7 @@ sethints(struct wl_listener *listener, void *data)
 	printstatus();
 
 	if (c->isurgent && surface && surface->mapped)
-		client_set_border_color(c, urgentcolor);
+		client_set_border_color(c, config.urgentcolor);
 }
 
 void

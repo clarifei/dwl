@@ -208,14 +208,15 @@ createmon(struct wl_listener *listener, void *data)
 	wlr_output_state_init(&state);
 	/* Initialize monitor state using configured rules */
 	m->tagset[0] = m->tagset[1] = 1;
-	for (r = monrules; r < END(monrules); r++) {
+	for (r = config.monrules; r < config.monrules + config.monrule_count; r++) {
 		if (!r->name || strstr(wlr_output->name, r->name)) {
 			m->m.x = r->x;
 			m->m.y = r->y;
 			m->mfact = r->mfact;
 			m->nmaster = r->nmaster;
 			m->lt[0] = r->lt;
-			m->lt[1] = &layouts[LENGTH(layouts) > 1 && r->lt != &layouts[1]];
+			m->lt[1] = &config.layouts[config.layout_count > 1
+					&& r->lt != &config.layouts[1]];
 			strncpy(m->ltsymbol, m->lt[m->sellt]->symbol, LENGTH(m->ltsymbol));
 			wlr_output_state_set_scale(&state, r->scale);
 			wlr_output_state_set_transform(&state, r->rr);
@@ -250,7 +251,7 @@ createmon(struct wl_listener *listener, void *data)
 	 *
 	 */
 	/* updatemons() will resize and set correct position */
-	m->fullscreen_bg = wlr_scene_rect_create(layers[LyrFS], 0, 0, fullscreen_bg);
+	m->fullscreen_bg = wlr_scene_rect_create(layers[LyrFS], 0, 0, config.fullscreen_bg);
 	wlr_scene_node_set_enabled(&m->fullscreen_bg->node, 0);
 
 	/* Adds this to the output layout in the order it was configured.
@@ -299,12 +300,12 @@ dirtomon(enum wlr_direction dir)
 void
 outputmgrapply(struct wl_listener *listener, void *data)
 {
-	struct wlr_output_configuration_v1 *config = data;
-	outputmgrapplyortest(config, 0);
+	struct wlr_output_configuration_v1 *output_config = data;
+	outputmgrapplyortest(output_config, 0);
 }
 
 void
-outputmgrapplyortest(struct wlr_output_configuration_v1 *config, int test)
+outputmgrapplyortest(struct wlr_output_configuration_v1 *output_config, int test)
 {
 	/*
 	 * Called when a client such as wlr-randr requests a change in output
@@ -315,7 +316,7 @@ outputmgrapplyortest(struct wlr_output_configuration_v1 *config, int test)
 	struct wlr_output_configuration_head_v1 *config_head;
 	int ok = 1;
 
-	wl_list_for_each(config_head, &config->heads, link) {
+	wl_list_for_each(config_head, &output_config->heads, link) {
 		struct wlr_output *wlr_output = config_head->state.output;
 		Monitor *m = wlr_output->data;
 		struct wlr_output_state state;
@@ -357,10 +358,10 @@ apply_or_test:
 	}
 
 	if (ok)
-		wlr_output_configuration_v1_send_succeeded(config);
+		wlr_output_configuration_v1_send_succeeded(output_config);
 	else
-		wlr_output_configuration_v1_send_failed(config);
-	wlr_output_configuration_v1_destroy(config);
+		wlr_output_configuration_v1_send_failed(output_config);
+	wlr_output_configuration_v1_destroy(output_config);
 
 	/* https://codeberg.org/dwl/dwl/issues/577 */
 	updatemons(NULL, NULL);
@@ -369,8 +370,8 @@ apply_or_test:
 void
 outputmgrtest(struct wl_listener *listener, void *data)
 {
-	struct wlr_output_configuration_v1 *config = data;
-	outputmgrapplyortest(config, 1);
+	struct wlr_output_configuration_v1 *output_config = data;
+	outputmgrapplyortest(output_config, 1);
 }
 
 void
@@ -489,7 +490,7 @@ updatemons(struct wl_listener *listener, void *data)
 	 * positions, focus, and the stored configuration in wlroots'
 	 * output-manager implementation.
 	 */
-	struct wlr_output_configuration_v1 *config
+	struct wlr_output_configuration_v1 *output_config
 			= wlr_output_configuration_v1_create();
 	Client *c;
 	struct wlr_output_configuration_head_v1 *config_head;
@@ -499,7 +500,7 @@ updatemons(struct wl_listener *listener, void *data)
 	wl_list_for_each(m, &mons, link) {
 		if (m->wlr_output->enabled || m->asleep)
 			continue;
-		config_head = wlr_output_configuration_head_v1_create(config, m->wlr_output);
+		config_head = wlr_output_configuration_head_v1_create(output_config, m->wlr_output);
 		config_head->state.enabled = 0;
 		/* Remove this output from the layout to avoid cursor enter inside it */
 		wlr_output_layout_remove(output_layout, m->wlr_output);
@@ -526,7 +527,7 @@ updatemons(struct wl_listener *listener, void *data)
 	wl_list_for_each(m, &mons, link) {
 		if (!m->wlr_output->enabled)
 			continue;
-		config_head = wlr_output_configuration_head_v1_create(config, m->wlr_output);
+		config_head = wlr_output_configuration_head_v1_create(output_config, m->wlr_output);
 
 		/* Get the effective monitor geometry to use for surfaces */
 		wlr_output_layout_get_box(output_layout, m->wlr_output, &m->m);
@@ -582,7 +583,7 @@ updatemons(struct wl_listener *listener, void *data)
 	 * at the wrong position after all. */
 	wlr_cursor_move(cursor, NULL, 0, 0);
 
-	wlr_output_manager_v1_set_configuration(output_mgr, config);
+	wlr_output_manager_v1_set_configuration(output_mgr, output_config);
 }
 
 Monitor *

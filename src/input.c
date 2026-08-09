@@ -41,7 +41,7 @@ buttonpress(struct wl_listener *listener, void *data)
 
 		keyboard = wlr_seat_get_keyboard(seat);
 		mods = keyboard ? wlr_keyboard_get_modifiers(keyboard) : 0;
-		for (b = buttons; b < END(buttons); b++) {
+		for (b = config.buttons; b < config.buttons + config.button_count; b++) {
 			if (CLEANMASK(mods) == CLEANMASK(b->mod) &&
 					event->button == b->button && b->func) {
 				b->func(&b->arg);
@@ -98,7 +98,7 @@ createkeyboardgroup(void)
 
 	/* Prepare an XKB keymap and assign it to the keyboard group. */
 	context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-	if (!(keymap = xkb_keymap_new_from_names(context, &xkb_rules,
+		if (!(keymap = xkb_keymap_new_from_names(context, &config.xkb_rules,
 				XKB_KEYMAP_COMPILE_NO_FLAGS)))
 		die("failed to compile keymap");
 
@@ -106,7 +106,8 @@ createkeyboardgroup(void)
 	xkb_keymap_unref(keymap);
 	xkb_context_unref(context);
 
-	wlr_keyboard_set_repeat_info(&group->wlr_group->keyboard, repeat_rate, repeat_delay);
+	wlr_keyboard_set_repeat_info(&group->wlr_group->keyboard,
+			config.repeat_rate, config.repeat_delay);
 
 	/* Set up listeners for keyboard events */
 	LISTEN(&group->wlr_group->keyboard.events.key, &group->key, keypress);
@@ -131,36 +132,38 @@ createpointer(struct wlr_pointer *pointer)
 			&& (device = wlr_libinput_get_device_handle(&pointer->base))) {
 
 		if (libinput_device_config_tap_get_finger_count(device)) {
-			libinput_device_config_tap_set_enabled(device, tap_to_click);
-			libinput_device_config_tap_set_drag_enabled(device, tap_and_drag);
-			libinput_device_config_tap_set_drag_lock_enabled(device, drag_lock);
-			libinput_device_config_tap_set_button_map(device, button_map);
+			libinput_device_config_tap_set_enabled(device, config.tap_to_click);
+			libinput_device_config_tap_set_drag_enabled(device, config.tap_and_drag);
+			libinput_device_config_tap_set_drag_lock_enabled(device, config.drag_lock);
+			libinput_device_config_tap_set_button_map(device, config.button_map);
 		}
 
 		if (libinput_device_config_scroll_has_natural_scroll(device))
-			libinput_device_config_scroll_set_natural_scroll_enabled(device, natural_scrolling);
+			libinput_device_config_scroll_set_natural_scroll_enabled(device,
+					config.natural_scrolling);
 
 		if (libinput_device_config_dwt_is_available(device))
-			libinput_device_config_dwt_set_enabled(device, disable_while_typing);
+			libinput_device_config_dwt_set_enabled(device, config.disable_while_typing);
 
 		if (libinput_device_config_left_handed_is_available(device))
-			libinput_device_config_left_handed_set(device, left_handed);
+			libinput_device_config_left_handed_set(device, config.left_handed);
 
 		if (libinput_device_config_middle_emulation_is_available(device))
-			libinput_device_config_middle_emulation_set_enabled(device, middle_button_emulation);
+			libinput_device_config_middle_emulation_set_enabled(device,
+					config.middle_button_emulation);
 
 		if (libinput_device_config_scroll_get_methods(device) != LIBINPUT_CONFIG_SCROLL_NO_SCROLL)
-			libinput_device_config_scroll_set_method(device, scroll_method);
+			libinput_device_config_scroll_set_method(device, config.scroll_method);
 
 		if (libinput_device_config_click_get_methods(device) != LIBINPUT_CONFIG_CLICK_METHOD_NONE)
-			libinput_device_config_click_set_method(device, click_method);
+			libinput_device_config_click_set_method(device, config.click_method);
 
 		if (libinput_device_config_send_events_get_modes(device))
-			libinput_device_config_send_events_set_mode(device, send_events_mode);
+			libinput_device_config_send_events_set_mode(device, config.send_events_mode);
 
 		if (libinput_device_config_accel_is_available(device)) {
-			libinput_device_config_accel_set_profile(device, accel_profile);
-			libinput_device_config_accel_set_speed(device, accel_speed);
+			libinput_device_config_accel_set_profile(device, config.accel_profile);
+			libinput_device_config_accel_set_speed(device, config.accel_speed);
 		}
 	}
 
@@ -279,7 +282,7 @@ keybinding(uint32_t mods, xkb_keysym_t sym)
 	 * processing.
 	 */
 	const Key *k;
-	for (k = keys; k < END(keys); k++) {
+	for (k = config.keys; k < config.keys + config.key_count; k++) {
 		if (CLEANMASK(mods) == CLEANMASK(k->mod)
 				&& xkb_keysym_to_lower(sym) == xkb_keysym_to_lower(k->keysym)
 				&& k->func) {
@@ -438,7 +441,7 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 		wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
 
 		/* Update selmon (even while dragging a window) */
-		if (sloppyfocus)
+		if (config.sloppyfocus)
 			selmon = xytomon(cursor->x, cursor->y);
 	}
 
@@ -516,7 +519,7 @@ pointerfocus(Client *c, struct wlr_surface *surface, double sx, double sy,
 	struct timespec now;
 
 	if (surface != seat->pointer_state.focused_surface &&
-			sloppyfocus && time && c && !client_is_unmanaged(c))
+			config.sloppyfocus && time && c && !client_is_unmanaged(c))
 		focusclient(c, 0);
 
 	/* If surface is NULL, clear pointer focus */

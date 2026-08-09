@@ -31,7 +31,7 @@ applyrules(Client *c)
 	appid = client_get_appid(c);
 	title = client_get_title(c);
 
-	for (r = rules; r < END(rules); r++) {
+	for (r = config.rules; r < config.rules + config.rule_count; r++) {
 		if ((!r->title || strstr(title, r->title))
 				&& (!r->id || strstr(appid, r->id))) {
 			c->isfloating = r->isfloating;
@@ -134,7 +134,7 @@ createnotify(struct wl_listener *listener, void *data)
 	/* Allocate a Client for this surface */
 	c = toplevel->base->data = ecalloc(1, sizeof(*c));
 	c->surface.xdg = toplevel->base;
-	c->bw = borderpx;
+	c->bw = config.borderpx;
 
 	LISTEN(&toplevel->base->surface->events.commit, &c->commit, commitnotify);
 	LISTEN(&toplevel->base->surface->events.map, &c->map, mapnotify);
@@ -223,7 +223,7 @@ focusclient(Client *c, int lift)
 		/* Don't change border color if there is an exclusive focus or we are
 		 * handling a drag operation */
 		if (!exclusive_focus && !seat->drag)
-			client_set_border_color(c, focuscolor);
+			client_set_border_color(c, config.focuscolor);
 	}
 
 	/* Deactivate old client if focus is changing */
@@ -240,7 +240,7 @@ focusclient(Client *c, int lift)
 		/* Don't deactivate old client if the new one wants focus, as this causes issues with winecfg
 		 * and probably other clients */
 		} else if (old_c && !client_is_unmanaged(old_c) && (!c || !client_wants_focus(c))) {
-			client_set_border_color(old_c, bordercolor);
+			client_set_border_color(old_c, config.bordercolor);
 
 			client_activate_surface(old, 0);
 		}
@@ -324,7 +324,7 @@ mapnotify(struct wl_listener *listener, void *data)
 
 	for (i = 0; i < 4; i++) {
 		c->border[i] = wlr_scene_rect_create(c->scene, 0, 0,
-				c->isurgent ? urgentcolor : bordercolor);
+				c->isurgent ? config.urgentcolor : config.bordercolor);
 		c->border[i]->node.data = c;
 	}
 
@@ -438,7 +438,7 @@ setfullscreen(Client *c, int fullscreen)
 	c->isfullscreen = fullscreen;
 	if (!c->mon || !client_surface(c)->mapped)
 		return;
-	c->bw = fullscreen ? 0 : borderpx;
+	c->bw = fullscreen ? 0 : config.borderpx;
 	client_set_fullscreen(c, fullscreen);
 	wlr_scene_node_reparent(&c->scene->node, layers[c->isfullscreen
 			? LyrFS : c->isfloating ? LyrFloat : LyrTile]);
@@ -525,5 +525,5 @@ urgent(struct wl_listener *listener, void *data)
 	printstatus();
 
 	if (client_surface(c)->mapped)
-		client_set_border_color(c, urgentcolor);
+		client_set_border_color(c, config.urgentcolor);
 }
