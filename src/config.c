@@ -1220,7 +1220,7 @@ config_defaults(Config *cfg)
 	cfg->tap_to_click = 1;
 	cfg->tap_and_drag = 1;
 	cfg->drag_lock = 1;
-	cfg->natural_scrolling = 1;
+	cfg->natural_scrolling = 0;
 	cfg->disable_while_typing = 1;
 	cfg->left_handed = 0;
 	cfg->middle_button_emulation = 0;

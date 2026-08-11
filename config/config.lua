@@ -48,7 +48,7 @@ return {
     tap_to_click = true,
     tap_and_drag = true,
     drag_lock = true,
-    natural_scrolling = true,
+    natural_scrolling = false,
     disable_while_typing = true,
     left_handed = false,
     middle_button_emulation = false,

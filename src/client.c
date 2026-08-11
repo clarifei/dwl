@@ -413,7 +413,6 @@ resize(Client *c, struct wlr_box geo, int interact)
 
 	bbox = interact ? &sgeom : &c->mon->w;
 
-	clientscenerestore(c);
 	client_set_bounds(c, geo.width, geo.height);
 	c->geom = geo;
 	if (!ISCANVAS(c->mon) || c->isfullscreen)

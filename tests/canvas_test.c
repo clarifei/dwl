@@ -33,8 +33,9 @@ main(void)
 		420.25));
 	assert(canvas_zoom_factor(1.2, -30.0) > 1.0);
 	assert(canvas_zoom_factor(1.2, 30.0) < 1.0);
-	assert(close_enough(canvas_render_scale(1.0, 1.5), 1.5));
-	assert(close_enough(canvas_render_scale(2.0, 0.5), 2.0));
+	assert(canvas_buffer_base_length(800, 1200, 1200, 1) == 1200);
+	assert(canvas_buffer_base_length(800, 1200, 1200, 0) == 800);
+	assert(canvas_buffer_base_length(800, 900, 1200, 0) == 900);
 
 	assert(canvas_output_mode_better(1920, 1080, 390297,
 		1920, 1080, 60000));

@@ -72,7 +72,7 @@ workspaces. New windows open in the current viewport center.
 - Drag empty space with the left button to pan.
 - Scroll with two fingers over empty space, or swipe with three fingers anywhere.
 - Use the mouse wheel over empty space, or `Super` + wheel anywhere, to zoom
-  around the active window.
+  around the viewport center.
 - `Super` + middle-button drag pans from anywhere.
 - `Super` + left/right-button drag moves/resizes a window.
 - `Alt` + `Tab` cycles to and centers a window; add `Shift` to reverse it.
@@ -81,8 +81,8 @@ workspaces. New windows open in the current viewport center.
 
 `canvas.pan_speed`, `zoom_min`, `zoom_max`, and `zoom_step` calibrate navigation
 and are applied by hot reload. Windows keep their native logical size while the
-scene graph renders the camera transform. Zoomed native Wayland surfaces receive
-a matching render-scale hint so their content stays sharp.
+scene graph renders the camera transform. Zoom-in magnifies native client buffers
+with nearest filtering, avoiding client reflow and oversized repaint buffers.
 
 ## Configuration
 

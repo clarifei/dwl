@@ -41,10 +41,10 @@ canvas_zoom_factor(double step, double delta)
 	return pow(step, -delta / 30.0);
 }
 
-static inline double
-canvas_render_scale(double output_scale, double zoom)
+static inline int
+canvas_buffer_base_length(int base, int destination, int scaled, int committed)
 {
-	return output_scale * (zoom > 1.0 ? zoom : 1.0);
+	return committed || destination != scaled ? destination : base;
 }
 
 static inline int

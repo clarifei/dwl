@@ -321,7 +321,6 @@ static void axisnotify(struct wl_listener *listener, void *data);
 static void buttonpress(struct wl_listener *listener, void *data);
 static double clientcanvasscale(Client *c);
 static void clientsceneposition(Client *c);
-static void clientscenerestore(Client *c);
 static void clientsceneupdate(Client *c);
 static void canvaspointtoscreen(Monitor *m, double x, double y,
 		double *screen_x, double *screen_y);
