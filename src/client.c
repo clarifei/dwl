@@ -103,7 +103,10 @@ commitpopup(struct wl_listener *listener, void *data)
 		wlr_xdg_popup_destroy(popup);
 		return;
 	}
-	box = type == LayerShell ? l->mon->m : c->mon->w;
+	if (c && ISCANVAS(c->mon) && !c->isfullscreen)
+		canvasvisiblebox(c->mon, &box);
+	else
+		box = type == LayerShell ? l->mon->m : c->mon->w;
 	box.x -= (type == LayerShell ? l->scene->node.x : c->geom.x);
 	box.y -= (type == LayerShell ? l->scene->node.y : c->geom.y);
 	wlr_xdg_popup_unconstrain_from_box(popup, &box);
@@ -296,6 +299,7 @@ mapnotify(struct wl_listener *listener, void *data)
 	Client *p = NULL;
 	Client *w, *c = wl_container_of(listener, c, map);
 	Monitor *m;
+	double world_x, world_y;
 	int i;
 
 	/* Create scene tree for this client and its border */
@@ -347,13 +351,18 @@ mapnotify(struct wl_listener *listener, void *data)
 	} else {
 		applyrules(c);
 	}
-	if (!p && ISCANVAS(c->mon))
+	if (!p && ISCANVAS(c->mon)) {
+		canvaspointtoworld(c->mon,
+				c->mon->w.x + c->mon->w.width / 2.0,
+				c->mon->w.y + c->mon->w.height / 2.0,
+				&world_x, &world_y);
 		resize(c, (struct wlr_box){
-			.x = c->mon->w.x + (c->mon->w.width - c->geom.width) / 2,
-			.y = c->mon->w.y + (c->mon->w.height - c->geom.height) / 2,
+			.x = (int)round(world_x - c->geom.width / 2.0),
+			.y = (int)round(world_y - c->geom.height / 2.0),
 			.width = c->geom.width,
 			.height = c->geom.height,
 		}, 1);
+	}
 	printstatus();
 
 unset_fullscreen:
@@ -402,6 +411,7 @@ resize(Client *c, struct wlr_box geo, int interact)
 
 	bbox = interact ? &sgeom : &c->mon->w;
 
+	clientscenerestore(c);
 	client_set_bounds(c, geo.width, geo.height);
 	c->geom = geo;
 	if (!ISCANVAS(c->mon) || c->isfullscreen)
@@ -423,6 +433,7 @@ resize(Client *c, struct wlr_box geo, int interact)
 			c->geom.height - 2 * c->bw);
 	client_get_clip(c, &clip);
 	wlr_scene_subsurface_tree_set_clip(&c->scene_surface->node, &clip);
+	clientsceneupdate(c);
 }
 
 void

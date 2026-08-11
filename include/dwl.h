@@ -81,6 +81,7 @@
 #include <xcb/xcb_icccm.h>
 #endif
 
+#include "canvas.h"
 #include "util.h"
 
 /* macros */
@@ -211,8 +212,8 @@ struct Monitor {
 	struct wlr_session_lock_surface_v1 *lock_surface;
 	struct wlr_box m; /* monitor area, layout-relative */
 	struct wlr_box w; /* window area, layout-relative */
-	int canvas_x, canvas_y; /* accumulated screen-space canvas translation */
-	double canvas_remainder_x, canvas_remainder_y;
+	double canvas_x, canvas_y; /* screen-space translation */
+	double canvas_zoom;
 	struct wl_list layers[4]; /* LayerSurface.link */
 	const Layout *lt[2];
 	unsigned int seltags;
@@ -267,6 +268,9 @@ typedef struct {
 	float urgentcolor[4];
 	float fullscreen_bg[4];
 	float pan_speed;
+	float zoom_min;
+	float zoom_max;
+	float zoom_step;
 	int tagcount;
 	enum wlr_log_importance log_level;
 
@@ -312,6 +316,14 @@ static void arrangelayer(Monitor *m, struct wl_list *list,
 static void arrangelayers(Monitor *m);
 static void axisnotify(struct wl_listener *listener, void *data);
 static void buttonpress(struct wl_listener *listener, void *data);
+static double clientcanvasscale(Client *c);
+static void clientscenerestore(Client *c);
+static void clientsceneupdate(Client *c);
+static void canvaspointtoscreen(Monitor *m, double x, double y,
+		double *screen_x, double *screen_y);
+static void canvaspointtoworld(Monitor *m, double x, double y,
+		double *world_x, double *world_y);
+static void canvasvisiblebox(Monitor *m, struct wlr_box *box);
 static void centercanvas(const Arg *arg);
 static void chvt(const Arg *arg);
 static void checkidleinhibitor(struct wlr_surface *exclude);
@@ -407,6 +419,7 @@ static void togglefloating(const Arg *arg);
 static void togglefullscreen(const Arg *arg);
 static void toggletag(const Arg *arg);
 static void toggleview(const Arg *arg);
+static void updatecanvas(Monitor *m);
 static void unlocksession(struct wl_listener *listener, void *data);
 static void unmaplayersurfacenotify(struct wl_listener *listener, void *data);
 static void unmapnotify(struct wl_listener *listener, void *data);
@@ -420,6 +433,8 @@ static Monitor *xytomon(double x, double y);
 static void xytonode(double x, double y, struct wlr_surface **psurface,
 		Client **pc, LayerSurface **pl, double *nx, double *ny);
 static void zoom(const Arg *arg);
+static void zoomcanvas(const Arg *arg);
+static void zoomcanvasat(Monitor *m, double factor, double x, double y);
 
 static int config_init(const char *path);
 static void config_watch_start(void);

@@ -71,14 +71,16 @@ workspaces. New windows open in the current viewport center.
 
 - Drag empty space with the left button to pan.
 - Scroll with two fingers over empty space, or swipe with three fingers anywhere.
-- `Alt` + middle-button drag pans from anywhere.
-- `Alt` + left/right-button drag moves/resizes a window.
-- `Alt` + `Tab` cycles to and centers a window; `Alt` + `c` centers the current one.
-- `Alt` + `0` returns the canvas to its origin.
+- Use the mouse wheel over empty space, or `Super` + wheel anywhere, to zoom at
+  the pointer.
+- `Super` + middle-button drag pans from anywhere.
+- `Super` + left/right-button drag moves/resizes a window.
+- `Super` + `Tab` cycles to and centers a window; `Super` + `c` centers it.
+- `Super` + `-`/`=` zooms out/in; `Super` + `0` resets pan and zoom.
 
-`canvas.pan_speed` in the Lua configuration calibrates touchpad scrolling and
-swipes and is applied by hot reload. The canvas is currently rendered at 1:1;
-zoom and momentum are deliberately outside this first implementation.
+`canvas.pan_speed`, `zoom_min`, `zoom_max`, and `zoom_step` calibrate navigation
+and are applied by hot reload. Windows keep their native logical size while the
+scene graph renders the camera transform.
 
 ## Configuration
 

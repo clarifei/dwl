@@ -185,6 +185,20 @@ createlayersurface(struct wl_listener *listener, void *data)
 	wlr_surface_send_enter(surface, layer_surface->output);
 }
 
+static struct wlr_output_mode *
+bestoutputmode(struct wlr_output *output)
+{
+	struct wlr_output_mode *best = wlr_output_preferred_mode(output);
+	struct wlr_output_mode *mode;
+
+	wl_list_for_each(mode, &output->modes, link) {
+		if (!best || canvas_output_mode_better(mode->width, mode->height,
+				mode->refresh, best->width, best->height, best->refresh))
+			best = mode;
+	}
+	return best;
+}
+
 void
 createmon(struct wl_listener *listener, void *data)
 {
@@ -193,6 +207,7 @@ createmon(struct wl_listener *listener, void *data)
 	struct wlr_output *wlr_output = data;
 	const MonitorRule *r;
 	size_t i;
+	struct wlr_output_mode *mode;
 	struct wlr_output_state state;
 	Monitor *m;
 
@@ -201,6 +216,7 @@ createmon(struct wl_listener *listener, void *data)
 
 	m = wlr_output->data = ecalloc(1, sizeof(*m));
 	m->wlr_output = wlr_output;
+	m->canvas_zoom = 1.0;
 
 	for (i = 0; i < LENGTH(m->layers); i++)
 		wl_list_init(&m->layers[i]);
@@ -224,11 +240,9 @@ createmon(struct wl_listener *listener, void *data)
 		}
 	}
 
-	/* The mode is a tuple of (width, height, refresh rate), and each
-	 * monitor supports only a specific set of modes. We just pick the
-	 * monitor's preferred mode; a more sophisticated compositor would let
-	 * the user configure it. */
-	wlr_output_state_set_mode(&state, wlr_output_preferred_mode(wlr_output));
+	/* Use the fastest mode at the largest advertised resolution. */
+	if ((mode = bestoutputmode(wlr_output)))
+		wlr_output_state_set_mode(&state, mode);
 
 	/* Set up event listeners */
 	LISTEN(&wlr_output->events.frame, &m->frame, rendermon);
@@ -440,10 +454,14 @@ rendermon(struct wl_listener *listener, void *data)
 	struct wlr_output_state pending = {0};
 	struct timespec now;
 
+	/* Surface commits can restore unscaled scene state between frames. */
+	updatecanvas(m);
+
 	/* Render if no XDG clients have an outstanding resize and are visible on
 	 * this monitor. */
 	wl_list_for_each(c, &clients, link) {
-		if (c->resize && !c->isfloating && client_is_rendered_on_mon(c, m) && !client_is_stopped(c))
+		if (c->resize && !ISCANVAS(m) && !c->isfloating
+				&& client_is_rendered_on_mon(c, m) && !client_is_stopped(c))
 			goto skip;
 	}
 

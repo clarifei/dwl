@@ -48,7 +48,7 @@ static struct wlr_seat *seat;
 static KeyboardGroup *kb_group;
 static unsigned int cursor_mode;
 static Client *grabc;
-static int grabcx, grabcy; /* client-relative */
+static double grabcx, grabcy; /* client-relative canvas coordinates */
 
 static struct wlr_output_layout *output_layout;
 static struct wlr_box sgeom;

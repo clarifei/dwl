@@ -15,7 +15,7 @@ DWLDEVCFLAGS = -g -Wpedantic -Wall -Wextra -Wdeclaration-after-statement \
 PKGS      = wayland-server xkbcommon libinput lua5.4 $(XLIBS)
 DWLCFLAGS = `$(PKG_CONFIG) --cflags $(PKGS)` $(WLR_INCS) $(DWLCPPFLAGS) $(DWLDEVCFLAGS) $(CFLAGS)
 LDLIBS    = `$(PKG_CONFIG) --libs $(PKGS)` $(WLR_LIBS) -lm $(LIBS)
-DWL_SRC   = dwl.c include/dwl.h include/client.h include/util.h src/client.c src/input.c src/layout.c \
+DWL_SRC   = dwl.c include/dwl.h include/canvas.h include/client.h include/util.h src/client.c src/input.c src/layout.c \
 	src/output.c src/server.c src/session.c src/config.c src/xwayland.c
 
 all: dwl
@@ -25,6 +25,12 @@ dwl.o: $(DWL_SRC) config.mk cursor-shape-v1-protocol.h \
 	pointer-constraints-unstable-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h \
 	wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
 util.o: util.c include/util.h
+
+test: tests/canvas_test
+	./tests/canvas_test
+
+tests/canvas_test: tests/canvas_test.c include/canvas.h
+	$(CC) $(CPPFLAGS) -I. $(CFLAGS) tests/canvas_test.c -lm -o $@
 
 # wayland-scanner is a tool which generates C headers and rigging for Wayland
 # protocols, which are specified in XML. wlroots requires you to rig these up
@@ -49,7 +55,7 @@ xdg-shell-protocol.h:
 		$(WAYLAND_PROTOCOLS)/stable/xdg-shell/xdg-shell.xml $@
 
 clean:
-	rm -f dwl *.o *-protocol.h
+	rm -f dwl *.o *-protocol.h tests/canvas_test
 
 dist: clean
 	mkdir -p dwl-$(VERSION)

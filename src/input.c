@@ -7,18 +7,36 @@ axisnotify(struct wl_listener *listener, void *data)
 	/* This event is forwarded by the cursor when a pointer emits an axis event,
 	 * for example when you move the scroll wheel. */
 	struct wlr_pointer_axis_event *event = data;
+	struct wlr_keyboard *keyboard;
 	struct wlr_surface *surface = NULL;
 	Client *c = NULL;
 	Monitor *m = xytomon(cursor->x, cursor->y);
+	uint32_t mods;
 	double dx = 0, dy = 0;
+	int wheel;
 
 	wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
 	xytonode(cursor->x, cursor->y, &surface, &c, NULL, NULL, NULL);
+	keyboard = wlr_seat_get_keyboard(seat);
+	mods = keyboard ? wlr_keyboard_get_modifiers(keyboard) : 0;
+	wheel = event->source == WL_POINTER_AXIS_SOURCE_WHEEL
+			|| event->source == WL_POINTER_AXIS_SOURCE_WHEEL_TILT;
+	if (!locked && ISCANVAS(m) && (CLEANMASK(mods) & WLR_MODIFIER_LOGO)) {
+		if (event->orientation == WL_POINTER_AXIS_VERTICAL_SCROLL)
+			zoomcanvasat(m, canvas_zoom_factor(config.zoom_step, event->delta),
+					cursor->x, cursor->y);
+		return;
+	}
 	if (!locked && ISCANVAS(m) && !surface && !c) {
+		if (wheel && event->orientation == WL_POINTER_AXIS_VERTICAL_SCROLL) {
+			zoomcanvasat(m, canvas_zoom_factor(config.zoom_step, event->delta),
+					cursor->x, cursor->y);
+			return;
+		}
 		if (event->orientation == WL_POINTER_AXIS_HORIZONTAL_SCROLL)
-			dx = -event->delta * config.pan_speed;
+			dx = canvas_pan_delta(event->delta, config.pan_speed);
 		else
-			dy = -event->delta * config.pan_speed;
+			dy = canvas_pan_delta(event->delta, config.pan_speed);
 		pancanvas(m, dx, dy);
 		motionnotify(0, NULL, 0, 0, 0, 0);
 		return;
@@ -234,10 +252,16 @@ cursorwarptohint(void)
 	Client *c = NULL;
 	double sx = active_constraint->current.cursor_hint.x;
 	double sy = active_constraint->current.cursor_hint.y;
+	double x, y;
 
 	toplevel_from_wlr_surface(active_constraint->surface, &c, NULL);
 	if (c && active_constraint->current.cursor_hint.enabled) {
-		wlr_cursor_warp(cursor, NULL, sx + c->geom.x + c->bw, sy + c->geom.y + c->bw);
+		x = sx + c->geom.x + c->bw;
+		y = sy + c->geom.y + c->bw;
+		if (c->mon && ISCANVAS(c->mon) && !c->isfullscreen
+				&& !client_is_unmanaged(c))
+			canvaspointtoscreen(c->mon, x, y, &x, &y);
+		wlr_cursor_warp(cursor, NULL, x, y);
 		wlr_seat_pointer_warp(active_constraint->seat, sx, sy);
 	}
 }
@@ -420,6 +444,7 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 		double dx_unaccel, double dy_unaccel)
 {
 	double sx = 0, sy = 0, sx_confined, sy_confined;
+	double x, y, scale, logical_dx, logical_dy;
 	Client *c = NULL, *w = NULL;
 	LayerSurface *l = NULL;
 	struct wlr_surface *surface = NULL;
@@ -433,8 +458,18 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 			&& toplevel_from_wlr_surface(seat->pointer_state.focused_surface, &w, &l) >= 0) {
 		c = w;
 		surface = seat->pointer_state.focused_surface;
-		sx = cursor->x - (l ? l->scene->node.x : w->geom.x);
-		sy = cursor->y - (l ? l->scene->node.y : w->geom.y);
+		if (l) {
+			sx = cursor->x - l->scene->node.x;
+			sy = cursor->y - l->scene->node.y;
+		} else {
+			x = cursor->x;
+			y = cursor->y;
+			if (w->mon && ISCANVAS(w->mon) && !w->isfullscreen
+					&& !client_is_unmanaged(w))
+				canvaspointtoworld(w->mon, x, y, &x, &y);
+			sx = x - w->geom.x - w->bw;
+			sy = y - w->geom.y - w->bw;
+		}
 	}
 
 	/* time is 0 in internal calls meant to restore pointer focus. */
@@ -450,12 +485,21 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 				&& cursor_mode != CurPan) {
 			toplevel_from_wlr_surface(active_constraint->surface, &c, NULL);
 			if (c && active_constraint->surface == seat->pointer_state.focused_surface) {
-				sx = cursor->x - c->geom.x - c->bw;
-				sy = cursor->y - c->geom.y - c->bw;
+				x = cursor->x;
+				y = cursor->y;
+				if (c->mon && ISCANVAS(c->mon) && !c->isfullscreen
+						&& !client_is_unmanaged(c))
+					canvaspointtoworld(c->mon, x, y, &x, &y);
+				sx = x - c->geom.x - c->bw;
+				sy = y - c->geom.y - c->bw;
+				scale = clientcanvasscale(c);
+				logical_dx = dx / scale;
+				logical_dy = dy / scale;
 				if (wlr_region_confine(&active_constraint->region, sx, sy,
-						sx + dx, sy + dy, &sx_confined, &sy_confined)) {
-					dx = sx_confined - sx;
-					dy = sy_confined - sy;
+						sx + logical_dx, sy + logical_dy,
+						&sx_confined, &sy_confined)) {
+					dx = (sx_confined - sx) * scale;
+					dy = (sy_confined - sy) * scale;
 				}
 
 				if (active_constraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED)
@@ -477,12 +521,15 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 	/* If we are currently grabbing the mouse, handle and return */
 	if (cursor_mode == CurMove) {
 		/* Move the grabbed client to the new position. */
-		resize(grabc, (struct wlr_box){.x = (int)round(cursor->x) - grabcx, .y = (int)round(cursor->y) - grabcy,
+		canvaspointtoworld(grabc->mon, cursor->x, cursor->y, &x, &y);
+		resize(grabc, (struct wlr_box){.x = (int)round(x - grabcx), .y = (int)round(y - grabcy),
 			.width = grabc->geom.width, .height = grabc->geom.height}, 1);
 		return;
 	} else if (cursor_mode == CurResize) {
+		canvaspointtoworld(grabc->mon, cursor->x, cursor->y, &x, &y);
 		resize(grabc, (struct wlr_box){.x = grabc->geom.x, .y = grabc->geom.y,
-			.width = (int)round(cursor->x) - grabc->geom.x, .height = (int)round(cursor->y) - grabc->geom.y}, 1);
+			.width = (int)round(x) - grabc->geom.x,
+			.height = (int)round(y) - grabc->geom.y}, 1);
 		return;
 	} else if (cursor_mode == CurPan) {
 		pancanvas(selmon, dx, dy);
@@ -516,6 +563,8 @@ motionrelative(struct wl_listener *listener, void *data)
 void
 moveresize(const Arg *arg)
 {
+	double x, y;
+
 	if (cursor_mode != CurNormal && cursor_mode != CurPressed)
 		return;
 	xytonode(cursor->x, cursor->y, NULL, &grabc, NULL, NULL, NULL);
@@ -524,18 +573,21 @@ moveresize(const Arg *arg)
 
 	/* Float the window and tell motionnotify to grab it */
 	setfloating(grabc, 1);
+	canvaspointtoworld(grabc->mon, cursor->x, cursor->y, &x, &y);
 	switch (cursor_mode = arg->ui) {
 	case CurMove:
-		grabcx = (int)round(cursor->x) - grabc->geom.x;
-		grabcy = (int)round(cursor->y) - grabc->geom.y;
+		grabcx = x - grabc->geom.x;
+		grabcy = y - grabc->geom.y;
 		wlr_cursor_set_xcursor(cursor, cursor_mgr, "all-scroll");
 		break;
 	case CurResize:
 		/* Doesn't work for X11 output - the next absolute motion event
 		 * returns the cursor to where it started */
-		wlr_cursor_warp_closest(cursor, NULL,
-				grabc->geom.x + grabc->geom.width,
-				grabc->geom.y + grabc->geom.height);
+		x = grabc->geom.x + grabc->geom.width;
+		y = grabc->geom.y + grabc->geom.height;
+		if (grabc->mon && ISCANVAS(grabc->mon))
+			canvaspointtoscreen(grabc->mon, x, y, &x, &y);
+		wlr_cursor_warp_closest(cursor, NULL, x, y);
 		wlr_cursor_set_xcursor(cursor, cursor_mgr, "se-resize");
 		break;
 	}
@@ -568,7 +620,8 @@ swipeupdate(struct wl_listener *listener, void *data)
 		return;
 	m = xytomon(cursor->x, cursor->y);
 	wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
-	pancanvas(m, event->dx * config.pan_speed, event->dy * config.pan_speed);
+	pancanvas(m, canvas_pan_delta(event->dx, config.pan_speed),
+			canvas_pan_delta(event->dy, config.pan_speed));
 	motionnotify(0, NULL, 0, 0, 0, 0);
 }
 

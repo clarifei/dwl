@@ -12,7 +12,10 @@ return {
   },
 
   canvas = {
-    pan_speed = 1.0, -- use a negative value to reverse touchpad pan direction
+    pan_speed = 1.0,
+    zoom_min = 0.25,
+    zoom_max = 4.0,
+    zoom_step = 1.2,
   },
 
   tagcount = 1,
@@ -58,19 +61,21 @@ return {
   },
 
   keys = {
-    { mods = {"ALT"}, key = "p", action = "spawn", command = {"wmenu-run"} },
-    { mods = {"ALT", "SHIFT"}, key = "Return", action = "spawn", command = {"foot"} },
-    { mods = {"ALT"}, key = "Tab", action = "focusstack", value = 1 },
-    { mods = {"ALT", "SHIFT"}, key = "ISO_Left_Tab", action = "focusstack", value = -1 },
-    { mods = {"ALT"}, key = "c", action = "centercanvas" },
-    { mods = {"ALT"}, key = "0", action = "homecanvas" },
-    { mods = {"ALT", "SHIFT"}, key = "c", action = "killclient" },
-    { mods = {"ALT"}, key = "f", action = "togglefullscreen" },
-    { mods = {"ALT"}, key = "comma", action = "focusmon", value = "left" },
-    { mods = {"ALT"}, key = "period", action = "focusmon", value = "right" },
-    { mods = {"ALT", "SHIFT"}, key = "less", action = "tagmon", value = "left" },
-    { mods = {"ALT", "SHIFT"}, key = "greater", action = "tagmon", value = "right" },
-    { mods = {"ALT", "SHIFT"}, key = "q", action = "quit" },
+    { mods = {"SUPER"}, key = "p", action = "spawn", command = {"wmenu-run"} },
+    { mods = {"SUPER"}, key = "Return", action = "spawn", command = {"foot"} },
+    { mods = {"SUPER"}, key = "Tab", action = "focusstack", value = 1 },
+    { mods = {"SUPER", "SHIFT"}, key = "ISO_Left_Tab", action = "focusstack", value = -1 },
+    { mods = {"SUPER"}, key = "c", action = "centercanvas" },
+    { mods = {"SUPER"}, key = "0", action = "homecanvas" },
+    { mods = {"SUPER"}, key = "minus", action = "zoomcanvas", value = -1.0 },
+    { mods = {"SUPER"}, key = "equal", action = "zoomcanvas", value = 1.0 },
+    { mods = {"SUPER", "SHIFT"}, key = "c", action = "killclient" },
+    { mods = {"SUPER"}, key = "f", action = "togglefullscreen" },
+    { mods = {"SUPER"}, key = "comma", action = "focusmon", value = "left" },
+    { mods = {"SUPER"}, key = "period", action = "focusmon", value = "right" },
+    { mods = {"SUPER", "SHIFT"}, key = "less", action = "tagmon", value = "left" },
+    { mods = {"SUPER", "SHIFT"}, key = "greater", action = "tagmon", value = "right" },
+    { mods = {"SUPER", "SHIFT"}, key = "q", action = "quit" },
     { mods = {"CTRL", "ALT"}, key = "XF86Switch_VT_1", action = "chvt", value = 1 },
     { mods = {"CTRL", "ALT"}, key = "XF86Switch_VT_2", action = "chvt", value = 2 },
     { mods = {"CTRL", "ALT"}, key = "XF86Switch_VT_3", action = "chvt", value = 3 },
@@ -86,8 +91,8 @@ return {
   },
 
   buttons = {
-    { mods = {"ALT"}, button = "left", action = "moveresize", value = "move" },
-    { mods = {"ALT"}, button = "middle", action = "pan" },
-    { mods = {"ALT"}, button = "right", action = "moveresize", value = "resize" },
+    { mods = {"SUPER"}, button = "left", action = "moveresize", value = "move" },
+    { mods = {"SUPER"}, button = "middle", action = "pan" },
+    { mods = {"SUPER"}, button = "right", action = "moveresize", value = "resize" },
   },
 }

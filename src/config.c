@@ -250,6 +250,10 @@ config_action(const char *name, ConfigArg *argtype)
 		return homecanvas;
 	if (!strcmp(name, "centercanvas"))
 		return centercanvas;
+	if (!strcmp(name, "zoomcanvas")) {
+		*argtype = ConfigArgFloat;
+		return zoomcanvas;
+	}
 	if (!strcmp(name, "view")) {
 		*argtype = ConfigArgUInt;
 		return view;
@@ -679,6 +683,16 @@ config_parse_canvas(lua_State *lua, Config *cfg)
 	cfg->pan_speed = config_float_field(lua, -1, "pan_speed", cfg->pan_speed);
 	if (cfg->pan_speed < -10.0f || cfg->pan_speed > 10.0f || cfg->pan_speed == 0.0f)
 		luaL_error(lua, "canvas.pan_speed must be non-zero and between -10 and 10");
+	cfg->zoom_min = config_float_field(lua, -1, "zoom_min", cfg->zoom_min);
+	cfg->zoom_max = config_float_field(lua, -1, "zoom_max", cfg->zoom_max);
+	cfg->zoom_step = config_float_field(lua, -1, "zoom_step", cfg->zoom_step);
+	if (cfg->zoom_min < 0.1f || cfg->zoom_min > 1.0f)
+		luaL_error(lua, "canvas.zoom_min must be between 0.1 and 1");
+	if (cfg->zoom_max < 1.0f || cfg->zoom_max > 8.0f
+			|| cfg->zoom_max < cfg->zoom_min)
+		luaL_error(lua, "canvas.zoom_max must be between 1 and 8 and at least zoom_min");
+	if (cfg->zoom_step <= 1.0f || cfg->zoom_step > 2.0f)
+		luaL_error(lua, "canvas.zoom_step must be greater than 1 and at most 2");
 	lua_pop(lua, 1);
 }
 
@@ -1176,7 +1190,7 @@ config_defaults(Config *cfg)
 		XKB_KEY_XF86Switch_VT_9, XKB_KEY_XF86Switch_VT_10,
 		XKB_KEY_XF86Switch_VT_11, XKB_KEY_XF86Switch_VT_12,
 	};
-	uint32_t mod = WLR_MODIFIER_ALT;
+	uint32_t mod = WLR_MODIFIER_LOGO;
 	int i;
 
 	memset(cfg, 0, sizeof(*cfg));
@@ -1189,6 +1203,9 @@ config_defaults(Config *cfg)
 	config_set_color(cfg->urgentcolor, 0xff0000ff);
 	config_set_color(cfg->fullscreen_bg, 0x000000ff);
 	cfg->pan_speed = 1.0f;
+	cfg->zoom_min = 0.25f;
+	cfg->zoom_max = 4.0f;
+	cfg->zoom_step = 1.2f;
 	cfg->tagcount = 1;
 	cfg->log_level = WLR_ERROR;
 	cfg->repeat_rate = 25;
@@ -1213,13 +1230,15 @@ config_defaults(Config *cfg)
 
 	config_append_key(cfg, mod, XKB_KEY_p, spawn,
 			(Arg){.v = config_exec("wmenu-run")});
-	config_append_key(cfg, mod | WLR_MODIFIER_SHIFT, XKB_KEY_Return, spawn,
+	config_append_key(cfg, mod, XKB_KEY_Return, spawn,
 			(Arg){.v = config_exec("foot")});
 	config_default_key(cfg, mod, XKB_KEY_Tab, focusstack, (Arg){.i = 1});
 	config_default_key(cfg, mod | WLR_MODIFIER_SHIFT, XKB_KEY_ISO_Left_Tab,
 			focusstack, (Arg){.i = -1});
 	config_default_key(cfg, mod, XKB_KEY_c, centercanvas, (Arg){0});
 	config_default_key(cfg, mod, XKB_KEY_0, homecanvas, (Arg){0});
+	config_default_key(cfg, mod, XKB_KEY_minus, zoomcanvas, (Arg){.f = -1.0f});
+	config_default_key(cfg, mod, XKB_KEY_equal, zoomcanvas, (Arg){.f = 1.0f});
 	config_default_key(cfg, mod | WLR_MODIFIER_SHIFT, XKB_KEY_c, killclient, (Arg){0});
 	config_default_key(cfg, mod, XKB_KEY_f, togglefullscreen, (Arg){0});
 	config_default_key(cfg, mod, XKB_KEY_comma, focusmon,
@@ -1231,8 +1250,6 @@ config_defaults(Config *cfg)
 	config_default_key(cfg, mod | WLR_MODIFIER_SHIFT, XKB_KEY_greater, tagmon,
 			(Arg){.i = WLR_DIRECTION_RIGHT});
 	config_default_key(cfg, mod | WLR_MODIFIER_SHIFT, XKB_KEY_q, quit, (Arg){0});
-	config_default_key(cfg, WLR_MODIFIER_CTRL | WLR_MODIFIER_ALT,
-			XKB_KEY_Terminate_Server, quit, (Arg){0});
 	for (i = 0; i < 12; i++)
 		config_default_key(cfg, WLR_MODIFIER_CTRL | WLR_MODIFIER_ALT,
 				vt_keys[i], chvt, (Arg){.ui = (unsigned int)i + 1});
@@ -1484,6 +1501,8 @@ config_apply_live(const Config *old)
 		rule = config_monitor_rule(&config, m->wlr_output->name);
 		m->mfact = rule->mfact;
 		m->nmaster = rule->nmaster;
+		m->canvas_zoom = MAX(config.zoom_min,
+				MIN(config.zoom_max, m->canvas_zoom));
 		if (m->fullscreen_bg)
 			wlr_scene_rect_set_color(m->fullscreen_bg, config.fullscreen_bg);
 		wlr_output_state_init(&state);
