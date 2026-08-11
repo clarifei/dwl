@@ -1232,8 +1232,8 @@ config_defaults(Config *cfg)
 			(Arg){.v = config_exec("wmenu-run")});
 	config_append_key(cfg, mod, XKB_KEY_Return, spawn,
 			(Arg){.v = config_exec("foot")});
-	config_default_key(cfg, mod, XKB_KEY_Tab, focusstack, (Arg){.i = 1});
-	config_default_key(cfg, mod | WLR_MODIFIER_SHIFT, XKB_KEY_ISO_Left_Tab,
+	config_default_key(cfg, WLR_MODIFIER_ALT, XKB_KEY_Tab, focusstack, (Arg){.i = 1});
+	config_default_key(cfg, WLR_MODIFIER_ALT | WLR_MODIFIER_SHIFT, XKB_KEY_ISO_Left_Tab,
 			focusstack, (Arg){.i = -1});
 	config_default_key(cfg, mod, XKB_KEY_c, centercanvas, (Arg){0});
 	config_default_key(cfg, mod, XKB_KEY_0, homecanvas, (Arg){0});

@@ -21,6 +21,7 @@ main(void)
 	double subpixel_pan = 0.0;
 
 	assert(close_enough(canvas_pan_delta(12.0, 1.0), 12.0));
+	assert(close_enough(canvas_axis_pan_delta(12.0, 1.0), -12.0));
 	subpixel_pan += canvas_pan_delta(0.4, 1.0);
 	subpixel_pan += canvas_pan_delta(0.4, 1.0);
 	assert(close_enough(subpixel_pan, 0.8));
@@ -32,6 +33,8 @@ main(void)
 		420.25));
 	assert(canvas_zoom_factor(1.2, -30.0) > 1.0);
 	assert(canvas_zoom_factor(1.2, 30.0) < 1.0);
+	assert(close_enough(canvas_render_scale(1.0, 1.5), 1.5));
+	assert(close_enough(canvas_render_scale(2.0, 0.5), 2.0));
 
 	assert(canvas_output_mode_better(1920, 1080, 390297,
 		1920, 1080, 60000));

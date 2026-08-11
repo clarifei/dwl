@@ -63,8 +63,8 @@ return {
   keys = {
     { mods = {"SUPER"}, key = "p", action = "spawn", command = {"wmenu-run"} },
     { mods = {"SUPER"}, key = "Return", action = "spawn", command = {"foot"} },
-    { mods = {"SUPER"}, key = "Tab", action = "focusstack", value = 1 },
-    { mods = {"SUPER", "SHIFT"}, key = "ISO_Left_Tab", action = "focusstack", value = -1 },
+    { mods = {"ALT"}, key = "Tab", action = "focusstack", value = 1 },
+    { mods = {"ALT", "SHIFT"}, key = "ISO_Left_Tab", action = "focusstack", value = -1 },
     { mods = {"SUPER"}, key = "c", action = "centercanvas" },
     { mods = {"SUPER"}, key = "0", action = "homecanvas" },
     { mods = {"SUPER"}, key = "minus", action = "zoomcanvas", value = -1.0 },

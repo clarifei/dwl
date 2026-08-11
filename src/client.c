@@ -110,6 +110,8 @@ commitpopup(struct wl_listener *listener, void *data)
 	box.x -= (type == LayerShell ? l->scene->node.x : c->geom.x);
 	box.y -= (type == LayerShell ? l->scene->node.y : c->geom.y);
 	wlr_xdg_popup_unconstrain_from_box(popup, &box);
+	if (c)
+		clientsceneupdate(c);
 	wl_list_remove(&listener->link);
 	free(listener);
 }

@@ -11,6 +11,12 @@ canvas_pan_delta(double delta, double speed)
 }
 
 static inline double
+canvas_axis_pan_delta(double delta, double speed)
+{
+	return canvas_pan_delta(-delta, speed);
+}
+
+static inline double
 canvas_world_to_screen(double world, double origin, double pan, double zoom)
 {
 	return origin + (world - origin) * zoom + pan;
@@ -33,6 +39,12 @@ static inline double
 canvas_zoom_factor(double step, double delta)
 {
 	return pow(step, -delta / 30.0);
+}
+
+static inline double
+canvas_render_scale(double output_scale, double zoom)
+{
+	return output_scale * (zoom > 1.0 ? zoom : 1.0);
 }
 
 static inline int

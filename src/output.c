@@ -454,9 +454,6 @@ rendermon(struct wl_listener *listener, void *data)
 	struct wlr_output_state pending = {0};
 	struct timespec now;
 
-	/* Surface commits can restore unscaled scene state between frames. */
-	updatecanvas(m);
-
 	/* Render if no XDG clients have an outstanding resize and are visible on
 	 * this monitor. */
 	wl_list_for_each(c, &clients, link) {

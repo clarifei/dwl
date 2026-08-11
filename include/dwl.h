@@ -317,6 +317,7 @@ static void arrangelayers(Monitor *m);
 static void axisnotify(struct wl_listener *listener, void *data);
 static void buttonpress(struct wl_listener *listener, void *data);
 static double clientcanvasscale(Client *c);
+static void clientsceneposition(Client *c);
 static void clientscenerestore(Client *c);
 static void clientsceneupdate(Client *c);
 static void canvaspointtoscreen(Monitor *m, double x, double y,
@@ -419,7 +420,7 @@ static void togglefloating(const Arg *arg);
 static void togglefullscreen(const Arg *arg);
 static void toggletag(const Arg *arg);
 static void toggleview(const Arg *arg);
-static void updatecanvas(Monitor *m);
+static void updatecanvas(Monitor *m, int rescale);
 static void unlocksession(struct wl_listener *listener, void *data);
 static void unmaplayersurfacenotify(struct wl_listener *listener, void *data);
 static void unmapnotify(struct wl_listener *listener, void *data);
@@ -434,7 +435,7 @@ static void xytonode(double x, double y, struct wlr_surface **psurface,
 		Client **pc, LayerSurface **pl, double *nx, double *ny);
 static void zoom(const Arg *arg);
 static void zoomcanvas(const Arg *arg);
-static void zoomcanvasat(Monitor *m, double factor, double x, double y);
+static void zoomcanvasby(Monitor *m, double factor);
 
 static int config_init(const char *path);
 static void config_watch_start(void);

@@ -23,20 +23,18 @@ axisnotify(struct wl_listener *listener, void *data)
 			|| event->source == WL_POINTER_AXIS_SOURCE_WHEEL_TILT;
 	if (!locked && ISCANVAS(m) && (CLEANMASK(mods) & WLR_MODIFIER_LOGO)) {
 		if (event->orientation == WL_POINTER_AXIS_VERTICAL_SCROLL)
-			zoomcanvasat(m, canvas_zoom_factor(config.zoom_step, event->delta),
-					cursor->x, cursor->y);
+			zoomcanvasby(m, canvas_zoom_factor(config.zoom_step, event->delta));
 		return;
 	}
 	if (!locked && ISCANVAS(m) && !surface && !c) {
 		if (wheel && event->orientation == WL_POINTER_AXIS_VERTICAL_SCROLL) {
-			zoomcanvasat(m, canvas_zoom_factor(config.zoom_step, event->delta),
-					cursor->x, cursor->y);
+			zoomcanvasby(m, canvas_zoom_factor(config.zoom_step, event->delta));
 			return;
 		}
 		if (event->orientation == WL_POINTER_AXIS_HORIZONTAL_SCROLL)
-			dx = canvas_pan_delta(event->delta, config.pan_speed);
+			dx = canvas_axis_pan_delta(event->delta, config.pan_speed);
 		else
-			dy = canvas_pan_delta(event->delta, config.pan_speed);
+			dy = canvas_axis_pan_delta(event->delta, config.pan_speed);
 		pancanvas(m, dx, dy);
 		motionnotify(0, NULL, 0, 0, 0, 0);
 		return;

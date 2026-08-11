@@ -3,19 +3,106 @@
 
 typedef struct {
 	struct wlr_addon addon;
+	struct wl_listener commit;
+	struct wl_listener outputs_update;
+	struct wlr_scene_buffer *buffer;
+	struct wlr_surface *surface;
 	int x, y;
 	int scaled_x, scaled_y;
 	int width, height;
 	int scaled_width, scaled_height;
 	double scale;
+	double output_scale;
 	wlr_scene_buffer_point_accepts_input_func_t point_accepts_input;
 } CanvasNodeState;
+
+static const struct wlr_addon_interface canvas_node_addon_impl;
+
+static int
+canvasscaledlength(int length, double scale)
+{
+	return length ? MAX(1, (int)round(length * scale)) : 0;
+}
+
+static void
+canvasnodeupdatescale(CanvasNodeState *state)
+{
+	if (!state->surface || state->output_scale <= 0.0)
+		return;
+	if (state->buffer->primary_output)
+		state->output_scale = state->buffer->primary_output->output->scale;
+	client_set_scale(state->surface,
+			canvas_render_scale(state->output_scale, state->scale));
+}
+
+static void
+canvasnodebufferupdate(CanvasNodeState *state)
+{
+	struct wlr_scene_buffer *buffer = state->buffer;
+
+	if (buffer->dst_width != state->scaled_width
+			|| buffer->dst_height != state->scaled_height) {
+		state->width = buffer->dst_width;
+		state->height = buffer->dst_height;
+	}
+	state->scaled_width = canvasscaledlength(state->width, state->scale);
+	state->scaled_height = canvasscaledlength(state->height, state->scale);
+	wlr_scene_buffer_set_dest_size(buffer,
+			state->scaled_width, state->scaled_height);
+}
+
+static void
+canvasnodepositionupdate(struct wlr_scene_node *node, CanvasNodeState *state)
+{
+	int x, y;
+
+	if (node->x != state->scaled_x || node->y != state->scaled_y) {
+		state->x = node->x;
+		state->y = node->y;
+	}
+	x = (int)round(state->x * state->scale);
+	y = (int)round(state->y * state->scale);
+	state->scaled_x = x;
+	state->scaled_y = y;
+	wlr_scene_node_set_position(node, x, y);
+}
+
+static void
+canvasnodecommit(struct wl_listener *listener, void *data)
+{
+	CanvasNodeState *buffer_state = wl_container_of(listener, buffer_state, commit);
+	struct wlr_scene_node *node = &buffer_state->buffer->node;
+	struct wlr_addon *addon;
+	CanvasNodeState *state;
+
+	canvasnodebufferupdate(buffer_state);
+	while ((addon = wlr_addon_find(&node->addons,
+				node, &canvas_node_addon_impl))) {
+		state = wl_container_of(addon, state, addon);
+		canvasnodepositionupdate(node, state);
+		if (!node->parent)
+			break;
+		node = &node->parent->node;
+	}
+}
+
+static void
+canvasnodeoutputsupdate(struct wl_listener *listener, void *data)
+{
+	CanvasNodeState *state = wl_container_of(listener, state, outputs_update);
+
+	canvasnodeupdatescale(state);
+}
 
 static void
 canvasnodestatedestroy(struct wlr_addon *addon)
 {
 	CanvasNodeState *state = wl_container_of(addon, state, addon);
 
+	if (state->surface) {
+		wl_list_remove(&state->commit.link);
+		wl_list_remove(&state->outputs_update.link);
+	}
 	wlr_addon_finish(&state->addon);
 	free(state);
 }
@@ -67,11 +154,19 @@ canvasnodestate(struct wlr_scene_node *node)
 		struct wlr_scene_buffer *buffer = wlr_scene_buffer_from_node(node);
 		struct wlr_scene_surface *surface = wlr_scene_surface_try_from_buffer(buffer);
 
+		state->buffer = buffer;
 		state->width = state->scaled_width = buffer->dst_width;
 		state->height = state->scaled_height = buffer->dst_height;
 		if ((!state->width || !state->height) && surface) {
 			state->width = state->scaled_width = surface->surface->current.width;
 			state->height = state->scaled_height = surface->surface->current.height;
+		}
+		if (surface) {
+			state->surface = surface->surface;
+			state->commit.notify = canvasnodecommit;
+			wl_signal_add(&state->surface->events.commit, &state->commit);
+			state->outputs_update.notify = canvasnodeoutputsupdate;
+			wl_signal_add(&buffer->events.outputs_update, &state->outputs_update);
 		}
 		state->point_accepts_input = buffer->point_accepts_input;
 		if (state->point_accepts_input)
@@ -80,28 +175,15 @@ canvasnodestate(struct wlr_scene_node *node)
 	return state;
 }
 
-static int
-canvasscaledlength(int length, double scale)
-{
-	return length ? MAX(1, (int)round(length * scale)) : 0;
-}
-
 static void
-canvasnodescale(struct wlr_scene_node *node, double scale)
+canvasnodescale(struct wlr_scene_node *node, double scale, double output_scale)
 {
 	CanvasNodeState *state = canvasnodestate(node);
-	int x, y;
 
-	if (node->x != state->scaled_x || node->y != state->scaled_y) {
-		state->x = node->x;
-		state->y = node->y;
-	}
 	state->scale = scale;
-	x = (int)round(state->x * scale);
-	y = (int)round(state->y * scale);
-	state->scaled_x = x;
-	state->scaled_y = y;
-	wlr_scene_node_set_position(node, x, y);
+	if (output_scale > 0.0)
+		state->output_scale = output_scale;
+	canvasnodepositionupdate(node, state);
 
 	if (node->type == WLR_SCENE_NODE_RECT) {
 		struct wlr_scene_rect *rect = wlr_scene_rect_from_node(node);
@@ -116,23 +198,15 @@ canvasnodescale(struct wlr_scene_node *node, double scale)
 		wlr_scene_rect_set_size(rect,
 				state->scaled_width, state->scaled_height);
 	} else if (node->type == WLR_SCENE_NODE_BUFFER) {
-		struct wlr_scene_buffer *buffer = wlr_scene_buffer_from_node(node);
-
-		if (buffer->dst_width != state->scaled_width
-				|| buffer->dst_height != state->scaled_height) {
-			state->width = buffer->dst_width;
-			state->height = buffer->dst_height;
-		}
-		state->scaled_width = canvasscaledlength(state->width, scale);
-		state->scaled_height = canvasscaledlength(state->height, scale);
-		wlr_scene_buffer_set_dest_size(buffer,
-				state->scaled_width, state->scaled_height);
+		canvasnodebufferupdate(state);
+		if (output_scale > 0.0)
+			canvasnodeupdatescale(state);
 	} else {
 		struct wlr_scene_tree *tree = wlr_scene_tree_from_node(node);
 		struct wlr_scene_node *child;
 
 		wl_list_for_each(child, &tree->children, link)
-			canvasnodescale(child, scale);
+			canvasnodescale(child, scale, output_scale);
 	}
 }
 
@@ -208,18 +282,16 @@ clientscenerestore(Client *c)
 	if (!c || !c->scene || client_is_unmanaged(c))
 		return;
 	wl_list_for_each(node, &c->scene->children, link)
-		canvasnodescale(node, 1.0);
+		canvasnodescale(node, 1.0, 0.0);
 }
 
 void
-clientsceneupdate(Client *c)
+clientsceneposition(Client *c)
 {
-	struct wlr_scene_node *node;
-	double scale, x, y;
+	double x, y;
 
 	if (!c || !c->scene)
 		return;
-	scale = clientcanvasscale(c);
 	if (c->mon && ISCANVAS(c->mon) && !c->isfullscreen
 			&& !client_is_unmanaged(c)) {
 		canvaspointtoscreen(c->mon, c->geom.x, c->geom.y, &x, &y);
@@ -229,22 +301,40 @@ clientsceneupdate(Client *c)
 	}
 	wlr_scene_node_set_position(&c->scene->node,
 			(int)round(x), (int)round(y));
-	if (client_is_unmanaged(c))
-		return;
-	wl_list_for_each(node, &c->scene->children, link)
-		canvasnodescale(node, scale);
 }
 
 void
-updatecanvas(Monitor *m)
+clientsceneupdate(Client *c)
+{
+	struct wlr_scene_node *node;
+	double output_scale, scale;
+
+	clientsceneposition(c);
+	if (!c || !c->scene)
+		return;
+	if (client_is_unmanaged(c))
+		return;
+	scale = clientcanvasscale(c);
+	output_scale = c->mon ? c->mon->wlr_output->scale : 1.0;
+	wl_list_for_each(node, &c->scene->children, link)
+		canvasnodescale(node, scale, output_scale);
+}
+
+void
+updatecanvas(Monitor *m, int rescale)
 {
 	Client *c;
 
 	if (!m)
 		return;
-	wl_list_for_each(c, &clients, link)
-		if (c->mon == m)
+	wl_list_for_each(c, &clients, link) {
+		if (c->mon != m)
+			continue;
+		if (rescale)
 			clientsceneupdate(c);
+		else
+			clientsceneposition(c);
+	}
 }
 
 void
@@ -283,7 +373,7 @@ arrange(Monitor *m)
 
 	if (m->lt[m->sellt]->arrange)
 		m->lt[m->sellt]->arrange(m);
-	updatecanvas(m);
+	updatecanvas(m, 1);
 	motionnotify(0, NULL, 0, 0, 0, 0);
 	checkidleinhibitor(NULL);
 }
@@ -302,7 +392,7 @@ pancanvas(Monitor *m, double dx, double dy)
 		return;
 	m->canvas_x += dx;
 	m->canvas_y += dy;
-	updatecanvas(m);
+	updatecanvas(m, 0);
 }
 
 void
@@ -315,7 +405,7 @@ homecanvas(const Arg *arg)
 	selmon->canvas_x = 0.0;
 	selmon->canvas_y = 0.0;
 	selmon->canvas_zoom = 1.0;
-	updatecanvas(selmon);
+	updatecanvas(selmon, 1);
 	motionnotify(0, NULL, 0, 0, 0, 0);
 }
 
@@ -336,49 +426,47 @@ centercanvas(const Arg *arg)
 			- (client_x - selmon->m.x) * zoom;
 	selmon->canvas_y = center_y - selmon->m.y
 			- (client_y - selmon->m.y) * zoom;
-	updatecanvas(selmon);
+	updatecanvas(selmon, 0);
 	motionnotify(0, NULL, 0, 0, 0, 0);
 }
 
-
 void
-zoomcanvasat(Monitor *m, double factor, double x, double y)
+zoomcanvasby(Monitor *m, double factor)
 {
 	Client *focused;
-	double old_zoom, new_zoom;
+	double anchor_x, anchor_y, old_zoom, new_zoom;
 
 	if (!ISCANVAS(m) || !isfinite(factor) || factor <= 0.0
 			|| ((focused = focustop(m)) && focused->isfullscreen))
 		return;
+	if (focused) {
+		canvaspointtoscreen(m,
+				focused->geom.x + focused->geom.width / 2.0,
+				focused->geom.y + focused->geom.height / 2.0,
+				&anchor_x, &anchor_y);
+	} else {
+		anchor_x = m->w.x + m->w.width / 2.0;
+		anchor_y = m->w.y + m->w.height / 2.0;
+	}
 	old_zoom = m->canvas_zoom;
 	new_zoom = MAX(config.zoom_min, MIN(config.zoom_max, old_zoom * factor));
 	if (new_zoom == old_zoom)
 		return;
-	m->canvas_x = canvas_zoom_pan(x, m->m.x, m->canvas_x,
+	m->canvas_x = canvas_zoom_pan(anchor_x, m->m.x, m->canvas_x,
 			old_zoom, new_zoom);
-	m->canvas_y = canvas_zoom_pan(y, m->m.y, m->canvas_y,
+	m->canvas_y = canvas_zoom_pan(anchor_y, m->m.y, m->canvas_y,
 			old_zoom, new_zoom);
 	m->canvas_zoom = new_zoom;
-	updatecanvas(m);
+	updatecanvas(m, 1);
 	motionnotify(0, NULL, 0, 0, 0, 0);
 }
-
 
 void
 zoomcanvas(const Arg *arg)
 {
-	double x, y;
-
 	if (!arg || !ISCANVAS(selmon))
 		return;
-	if (xytomon(cursor->x, cursor->y) == selmon) {
-		x = cursor->x;
-		y = cursor->y;
-	} else {
-		x = selmon->w.x + selmon->w.width / 2.0;
-		y = selmon->w.y + selmon->w.height / 2.0;
-	}
-	zoomcanvasat(selmon, pow(config.zoom_step, arg->f), x, y);
+	zoomcanvasby(selmon, pow(config.zoom_step, arg->f));
 }
 
 void
