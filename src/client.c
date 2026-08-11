@@ -347,6 +347,13 @@ mapnotify(struct wl_listener *listener, void *data)
 	} else {
 		applyrules(c);
 	}
+	if (!p && ISCANVAS(c->mon))
+		resize(c, (struct wlr_box){
+			.x = c->mon->w.x + (c->mon->w.width - c->geom.width) / 2,
+			.y = c->mon->w.y + (c->mon->w.height - c->geom.height) / 2,
+			.width = c->geom.width,
+			.height = c->geom.height,
+		}, 1);
 	printstatus();
 
 unset_fullscreen:
@@ -397,7 +404,8 @@ resize(Client *c, struct wlr_box geo, int interact)
 
 	client_set_bounds(c, geo.width, geo.height);
 	c->geom = geo;
-	applybounds(c, bbox);
+	if (!ISCANVAS(c->mon) || c->isfullscreen)
+		applybounds(c, bbox);
 
 	/* Update scene-graph, including borders */
 	wlr_scene_node_set_position(&c->scene->node, c->geom.x, c->geom.y);

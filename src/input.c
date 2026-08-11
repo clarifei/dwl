@@ -7,9 +7,22 @@ axisnotify(struct wl_listener *listener, void *data)
 	/* This event is forwarded by the cursor when a pointer emits an axis event,
 	 * for example when you move the scroll wheel. */
 	struct wlr_pointer_axis_event *event = data;
+	struct wlr_surface *surface = NULL;
+	Client *c = NULL;
+	Monitor *m = xytomon(cursor->x, cursor->y);
+	double dx = 0, dy = 0;
+
 	wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
-	/* TODO: allow usage of scroll wheel for mousebindings, it can be implemented
-	 * by checking the event's orientation and the delta of the event */
+	xytonode(cursor->x, cursor->y, &surface, &c, NULL, NULL, NULL);
+	if (!locked && ISCANVAS(m) && !surface && !c) {
+		if (event->orientation == WL_POINTER_AXIS_HORIZONTAL_SCROLL)
+			dx = -event->delta * config.pan_speed;
+		else
+			dy = -event->delta * config.pan_speed;
+		pancanvas(m, dx, dy);
+		motionnotify(0, NULL, 0, 0, 0, 0);
+		return;
+	}
 	/* Notify the client with pointer focus of the axis event. */
 	wlr_seat_pointer_notify_axis(seat,
 			event->time_msec, event->orientation, event->delta,
@@ -21,8 +34,9 @@ buttonpress(struct wl_listener *listener, void *data)
 {
 	struct wlr_pointer_button_event *event = data;
 	struct wlr_keyboard *keyboard;
+	struct wlr_surface *surface = NULL;
 	uint32_t mods;
-	Client *c;
+	Client *c = NULL;
 	const Button *b;
 
 	wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
@@ -35,7 +49,7 @@ buttonpress(struct wl_listener *listener, void *data)
 			break;
 
 		/* Change focus if the button was _pressed_ over a client */
-		xytonode(cursor->x, cursor->y, NULL, &c, NULL, NULL, NULL);
+		xytonode(cursor->x, cursor->y, &surface, &c, NULL, NULL, NULL);
 		if (c && (!client_is_unmanaged(c) || client_wants_focus(c)))
 			focusclient(c, 1);
 
@@ -48,17 +62,28 @@ buttonpress(struct wl_listener *listener, void *data)
 				return;
 			}
 		}
+		if (event->button == BTN_LEFT && !surface && !c && ISCANVAS(selmon)) {
+			startpan(NULL);
+			return;
+		}
 		break;
 	case WL_POINTER_BUTTON_STATE_RELEASED:
 		/* If you released any buttons, we exit interactive move/resize mode. */
 		/* TODO: should reset to the pointer focus's current setcursor */
-		if (!locked && cursor_mode != CurNormal && cursor_mode != CurPressed) {
+		if (!locked && (cursor_mode == CurMove || cursor_mode == CurResize)) {
 			wlr_cursor_set_xcursor(cursor, cursor_mgr, "default");
 			cursor_mode = CurNormal;
 			/* Drop the window off on its new monitor */
 			selmon = xytomon(cursor->x, cursor->y);
-			setmon(grabc, selmon, 0);
+			if (grabc)
+				setmon(grabc, selmon, 0);
 			grabc = NULL;
+			return;
+		}
+		if (!locked && cursor_mode == CurPan) {
+			wlr_cursor_set_xcursor(cursor, cursor_mgr, "default");
+			cursor_mode = CurNormal;
+			motionnotify(0, NULL, 0, 0, 0, 0);
 			return;
 		}
 		cursor_mode = CurNormal;
@@ -421,7 +446,8 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 		wl_list_for_each(constraint, &pointer_constraints->constraints, link)
 			cursorconstrain(constraint);
 
-		if (active_constraint && cursor_mode != CurResize && cursor_mode != CurMove) {
+		if (active_constraint && cursor_mode != CurResize && cursor_mode != CurMove
+				&& cursor_mode != CurPan) {
 			toplevel_from_wlr_surface(active_constraint->surface, &c, NULL);
 			if (c && active_constraint->surface == seat->pointer_state.focused_surface) {
 				sx = cursor->x - c->geom.x - c->bw;
@@ -457,6 +483,9 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 	} else if (cursor_mode == CurResize) {
 		resize(grabc, (struct wlr_box){.x = grabc->geom.x, .y = grabc->geom.y,
 			.width = (int)round(cursor->x) - grabc->geom.x, .height = (int)round(cursor->y) - grabc->geom.y}, 1);
+		return;
+	} else if (cursor_mode == CurPan) {
+		pancanvas(selmon, dx, dy);
 		return;
 	}
 
@@ -510,6 +539,37 @@ moveresize(const Arg *arg)
 		wlr_cursor_set_xcursor(cursor, cursor_mgr, "se-resize");
 		break;
 	}
+}
+
+void
+startpan(const Arg *arg)
+{
+	Monitor *m;
+	Client *focused;
+
+	if (cursor_mode != CurNormal && cursor_mode != CurPressed)
+		return;
+	m = xytomon(cursor->x, cursor->y);
+	if (!ISCANVAS(m) || ((focused = focustop(m)) && focused->isfullscreen))
+		return;
+	selmon = m;
+	grabc = NULL;
+	cursor_mode = CurPan;
+	wlr_cursor_set_xcursor(cursor, cursor_mgr, "all-scroll");
+}
+
+void
+swipeupdate(struct wl_listener *listener, void *data)
+{
+	struct wlr_pointer_swipe_update_event *event = data;
+	Monitor *m;
+
+	if (locked || event->fingers != 3)
+		return;
+	m = xytomon(cursor->x, cursor->y);
+	wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
+	pancanvas(m, event->dx * config.pan_speed, event->dy * config.pan_speed);
+	motionnotify(0, NULL, 0, 0, 0, 0);
 }
 
 void

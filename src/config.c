@@ -244,6 +244,12 @@ config_action(const char *name, ConfigArg *argtype)
 		*argtype = ConfigArgMove;
 		return moveresize;
 	}
+	if (!strcmp(name, "pan"))
+		return startpan;
+	if (!strcmp(name, "homecanvas"))
+		return homecanvas;
+	if (!strcmp(name, "centercanvas"))
+		return centercanvas;
 	if (!strcmp(name, "view")) {
 		*argtype = ConfigArgUInt;
 		return view;
@@ -662,6 +668,21 @@ config_parse_appearance(lua_State *lua, Config *cfg)
 }
 
 static void
+config_parse_canvas(lua_State *lua, Config *cfg)
+{
+	lua_getfield(lua, 1, "canvas");
+	if (lua_isnil(lua, -1)) {
+		lua_pop(lua, 1);
+		return;
+	}
+	luaL_checktype(lua, -1, LUA_TTABLE);
+	cfg->pan_speed = config_float_field(lua, -1, "pan_speed", cfg->pan_speed);
+	if (cfg->pan_speed < -10.0f || cfg->pan_speed > 10.0f || cfg->pan_speed == 0.0f)
+		luaL_error(lua, "canvas.pan_speed must be non-zero and between -10 and 10");
+	lua_pop(lua, 1);
+}
+
+static void
 config_parse_logging(lua_State *lua, Config *cfg)
 {
 	const char *level;
@@ -794,7 +815,8 @@ config_parse_layouts(lua_State *lua, Config *cfg)
 			arrange_fn = tile;
 		else if (!strcmp(arrange_name, "monocle"))
 			arrange_fn = monocle;
-		else if (!strcmp(arrange_name, "floating") || !strcmp(arrange_name, "none"))
+		else if (!strcmp(arrange_name, "floating") || !strcmp(arrange_name, "canvas")
+				|| !strcmp(arrange_name, "none"))
 			arrange_fn = NULL;
 		else
 			luaL_error(lua, "unknown layout arrange function '%s'", arrange_name);
@@ -919,7 +941,7 @@ config_parse_monrules(lua_State *lua, Config *cfg)
 		x = config_int_field(lua, -1, "x", -1);
 		y = config_int_field(lua, -1, "y", -1);
 		lua_getfield(lua, -1, "layout");
-		layout_name = lua_isnil(lua, -1) ? "tile" : luaL_checkstring(lua, -1);
+		layout_name = lua_isnil(lua, -1) ? cfg->layouts[0].name : luaL_checkstring(lua, -1);
 		layout = config_find_layout(cfg, layout_name);
 		lua_pop(lua, 1);
 		if (!layout)
@@ -1090,6 +1112,7 @@ config_parse_root(lua_State *lua, Config *cfg)
 
 	luaL_checktype(lua, 1, LUA_TTABLE);
 	config_parse_appearance(lua, cfg);
+	config_parse_canvas(lua, cfg);
 	config_parse_logging(lua, cfg);
 	cfg->tagcount = config_int_field(lua, 1, "tagcount", cfg->tagcount);
 	if (cfg->tagcount < 1 || cfg->tagcount > 31)
@@ -1114,9 +1137,9 @@ config_parse_root(lua_State *lua, Config *cfg)
 	config_parse_libinput(lua, cfg);
 	config_parse_bindings(lua, cfg, "keys", 0);
 	config_parse_bindings(lua, cfg, "buttons", 1);
-	if (!cfg->layout_count || !cfg->monrule_count || !cfg->rule_count
-			|| !cfg->key_count || !cfg->button_count)
-		luaL_error(lua, "layouts, monitors, rules, keys, and buttons cannot be empty");
+	if (!cfg->layout_count || !cfg->monrule_count || !cfg->key_count
+			|| !cfg->button_count)
+		luaL_error(lua, "layouts, monitors, keys, and buttons cannot be empty");
 	return 0;
 }
 
@@ -1145,15 +1168,6 @@ config_default_key(Config *cfg, uint32_t mod, xkb_keysym_t keysym,
 static void
 config_defaults(Config *cfg)
 {
-	static const xkb_keysym_t tag_keys[] = {
-		XKB_KEY_1, XKB_KEY_2, XKB_KEY_3, XKB_KEY_4, XKB_KEY_5,
-		XKB_KEY_6, XKB_KEY_7, XKB_KEY_8, XKB_KEY_9,
-	};
-	static const xkb_keysym_t tag_shift_keys[] = {
-		XKB_KEY_exclam, XKB_KEY_at, XKB_KEY_numbersign, XKB_KEY_dollar,
-		XKB_KEY_percent, XKB_KEY_asciicircum, XKB_KEY_ampersand,
-		XKB_KEY_asterisk, XKB_KEY_parenleft,
-	};
 	static const xkb_keysym_t vt_keys[] = {
 		XKB_KEY_XF86Switch_VT_1, XKB_KEY_XF86Switch_VT_2,
 		XKB_KEY_XF86Switch_VT_3, XKB_KEY_XF86Switch_VT_4,
@@ -1174,14 +1188,15 @@ config_defaults(Config *cfg)
 	config_set_color(cfg->focuscolor, 0x005577ff);
 	config_set_color(cfg->urgentcolor, 0xff0000ff);
 	config_set_color(cfg->fullscreen_bg, 0x000000ff);
-	cfg->tagcount = 9;
+	cfg->pan_speed = 1.0f;
+	cfg->tagcount = 1;
 	cfg->log_level = WLR_ERROR;
 	cfg->repeat_rate = 25;
 	cfg->repeat_delay = 600;
 	cfg->tap_to_click = 1;
 	cfg->tap_and_drag = 1;
 	cfg->drag_lock = 1;
-	cfg->natural_scrolling = 0;
+	cfg->natural_scrolling = 1;
 	cfg->disable_while_typing = 1;
 	cfg->left_handed = 0;
 	cfg->middle_button_emulation = 0;
@@ -1192,11 +1207,7 @@ config_defaults(Config *cfg)
 	cfg->accel_speed = 0.0;
 	cfg->button_map = LIBINPUT_CONFIG_TAP_MAP_LRM;
 
-	config_append_layout(cfg, "tile", "[]=", tile);
-	config_append_layout(cfg, "floating", "><>", NULL);
-	config_append_layout(cfg, "monocle", "[M]", monocle);
-	config_append_rule(cfg, "Gimp_EXAMPLE", NULL, 0, 1, -1);
-	config_append_rule(cfg, "firefox_EXAMPLE", NULL, 1u << 8, 0, -1);
+	config_append_layout(cfg, "canvas", "[ ]", NULL);
 	config_append_monrule(cfg, NULL, 0.55f, 1, 1.0f,
 			&cfg->layouts[0], WL_OUTPUT_TRANSFORM_NORMAL, -1, -1);
 
@@ -1204,25 +1215,13 @@ config_defaults(Config *cfg)
 			(Arg){.v = config_exec("wmenu-run")});
 	config_append_key(cfg, mod | WLR_MODIFIER_SHIFT, XKB_KEY_Return, spawn,
 			(Arg){.v = config_exec("foot")});
-	config_default_key(cfg, mod, XKB_KEY_j, focusstack, (Arg){.i = 1});
-	config_default_key(cfg, mod, XKB_KEY_k, focusstack, (Arg){.i = -1});
-	config_default_key(cfg, mod, XKB_KEY_i, incnmaster, (Arg){.i = 1});
-	config_default_key(cfg, mod, XKB_KEY_d, incnmaster, (Arg){.i = -1});
-	config_default_key(cfg, mod, XKB_KEY_h, setmfact, (Arg){.f = -0.05f});
-	config_default_key(cfg, mod, XKB_KEY_l, setmfact, (Arg){.f = 0.05f});
-	config_default_key(cfg, mod, XKB_KEY_Return, zoom, (Arg){0});
-	config_default_key(cfg, mod, XKB_KEY_Tab, view, (Arg){0});
+	config_default_key(cfg, mod, XKB_KEY_Tab, focusstack, (Arg){.i = 1});
+	config_default_key(cfg, mod | WLR_MODIFIER_SHIFT, XKB_KEY_ISO_Left_Tab,
+			focusstack, (Arg){.i = -1});
+	config_default_key(cfg, mod, XKB_KEY_c, centercanvas, (Arg){0});
+	config_default_key(cfg, mod, XKB_KEY_0, homecanvas, (Arg){0});
 	config_default_key(cfg, mod | WLR_MODIFIER_SHIFT, XKB_KEY_c, killclient, (Arg){0});
-	config_default_key(cfg, mod, XKB_KEY_t, setlayout, (Arg){.v = &cfg->layouts[0]});
-	config_default_key(cfg, mod, XKB_KEY_f, setlayout, (Arg){.v = &cfg->layouts[1]});
-	config_default_key(cfg, mod, XKB_KEY_m, setlayout, (Arg){.v = &cfg->layouts[2]});
-	config_default_key(cfg, mod, XKB_KEY_space, setlayout, (Arg){0});
-	config_default_key(cfg, mod | WLR_MODIFIER_SHIFT, XKB_KEY_space,
-			togglefloating, (Arg){0});
-	config_default_key(cfg, mod, XKB_KEY_e, togglefullscreen, (Arg){0});
-	config_default_key(cfg, mod, XKB_KEY_0, view, (Arg){.ui = ~0u});
-	config_default_key(cfg, mod | WLR_MODIFIER_SHIFT, XKB_KEY_parenright,
-			tag, (Arg){.ui = ~0u});
+	config_default_key(cfg, mod, XKB_KEY_f, togglefullscreen, (Arg){0});
 	config_default_key(cfg, mod, XKB_KEY_comma, focusmon,
 			(Arg){.i = WLR_DIRECTION_LEFT});
 	config_default_key(cfg, mod, XKB_KEY_period, focusmon,
@@ -1231,16 +1230,6 @@ config_defaults(Config *cfg)
 			(Arg){.i = WLR_DIRECTION_LEFT});
 	config_default_key(cfg, mod | WLR_MODIFIER_SHIFT, XKB_KEY_greater, tagmon,
 			(Arg){.i = WLR_DIRECTION_RIGHT});
-	for (i = 0; i < 9; i++) {
-		config_default_key(cfg, mod, tag_keys[i], view,
-				(Arg){.ui = 1u << i});
-		config_default_key(cfg, mod | WLR_MODIFIER_CTRL, tag_keys[i], toggleview,
-				(Arg){.ui = 1u << i});
-		config_default_key(cfg, mod | WLR_MODIFIER_SHIFT, tag_shift_keys[i], tag,
-				(Arg){.ui = 1u << i});
-		config_default_key(cfg, mod | WLR_MODIFIER_CTRL | WLR_MODIFIER_SHIFT,
-				tag_shift_keys[i], toggletag, (Arg){.ui = 1u << i});
-	}
 	config_default_key(cfg, mod | WLR_MODIFIER_SHIFT, XKB_KEY_q, quit, (Arg){0});
 	config_default_key(cfg, WLR_MODIFIER_CTRL | WLR_MODIFIER_ALT,
 			XKB_KEY_Terminate_Server, quit, (Arg){0});
@@ -1248,7 +1237,7 @@ config_defaults(Config *cfg)
 		config_default_key(cfg, WLR_MODIFIER_CTRL | WLR_MODIFIER_ALT,
 				vt_keys[i], chvt, (Arg){.ui = (unsigned int)i + 1});
 	config_append_button(cfg, mod, BTN_LEFT, moveresize, (Arg){.ui = CurMove});
-	config_append_button(cfg, mod, BTN_MIDDLE, togglefloating, (Arg){0});
+	config_append_button(cfg, mod, BTN_MIDDLE, startpan, (Arg){0});
 	config_append_button(cfg, mod, BTN_RIGHT, moveresize, (Arg){.ui = CurResize});
 }
 

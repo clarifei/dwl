@@ -88,6 +88,7 @@
 #define MIN(A, B)               ((A) < (B) ? (A) : (B))
 #define CLEANMASK(mask)         (mask & ~WLR_MODIFIER_CAPS)
 #define VISIBLEON(C, M)         ((M) && (C)->mon == (M) && ((C)->tags & (M)->tagset[(M)->seltags]))
+#define ISCANVAS(M)             ((M) && !(M)->lt[(M)->sellt]->arrange)
 #define LENGTH(X)               (sizeof X / sizeof X[0])
 #define END(A)                  ((A) + LENGTH(A))
 #define TAGCOUNT                (config.tagcount)
@@ -96,7 +97,7 @@
 #define LISTEN_STATIC(E, H)     do { struct wl_listener *_l = ecalloc(1, sizeof(*_l)); _l->notify = (H); wl_signal_add((E), _l); } while (0)
 
 /* enums */
-enum { CurNormal, CurPressed, CurMove, CurResize }; /* cursor */
+enum { CurNormal, CurPressed, CurMove, CurResize, CurPan }; /* cursor */
 enum { XDGShell, LayerShell, X11 }; /* client types */
 enum { LyrBg, LyrBottom, LyrTile, LyrFloat, LyrTop, LyrFS, LyrOverlay, LyrBlock, NUM_LAYERS }; /* scene layers */
 
@@ -210,6 +211,8 @@ struct Monitor {
 	struct wlr_session_lock_surface_v1 *lock_surface;
 	struct wlr_box m; /* monitor area, layout-relative */
 	struct wlr_box w; /* window area, layout-relative */
+	int canvas_x, canvas_y; /* accumulated screen-space canvas translation */
+	double canvas_remainder_x, canvas_remainder_y;
 	struct wl_list layers[4]; /* LayerSurface.link */
 	const Layout *lt[2];
 	unsigned int seltags;
@@ -263,6 +266,7 @@ typedef struct {
 	float focuscolor[4];
 	float urgentcolor[4];
 	float fullscreen_bg[4];
+	float pan_speed;
 	int tagcount;
 	enum wlr_log_importance log_level;
 
@@ -308,6 +312,7 @@ static void arrangelayer(Monitor *m, struct wl_list *list,
 static void arrangelayers(Monitor *m);
 static void axisnotify(struct wl_listener *listener, void *data);
 static void buttonpress(struct wl_listener *listener, void *data);
+static void centercanvas(const Arg *arg);
 static void chvt(const Arg *arg);
 static void checkidleinhibitor(struct wlr_surface *exclude);
 static void cleanup(void);
@@ -349,6 +354,7 @@ static Client *focustop(Monitor *m);
 static void fullscreennotify(struct wl_listener *listener, void *data);
 static void gpureset(struct wl_listener *listener, void *data);
 static void handlesig(int signo);
+static void homecanvas(const Arg *arg);
 static void incnmaster(const Arg *arg);
 static void inputdevice(struct wl_listener *listener, void *data);
 static int keybinding(uint32_t mods, xkb_keysym_t sym);
@@ -368,6 +374,7 @@ static void moveresize(const Arg *arg);
 static void outputmgrapply(struct wl_listener *listener, void *data);
 static void outputmgrapplyortest(struct wlr_output_configuration_v1 *config, int test);
 static void outputmgrtest(struct wl_listener *listener, void *data);
+static void pancanvas(Monitor *m, double dx, double dy);
 static void pointerfocus(Client *c, struct wlr_surface *surface,
 		double sx, double sy, uint32_t time);
 static void printstatus(void);
@@ -390,7 +397,9 @@ static void setpsel(struct wl_listener *listener, void *data);
 static void setsel(struct wl_listener *listener, void *data);
 static void setup(void);
 static void spawn(const Arg *arg);
+static void startpan(const Arg *arg);
 static void startdrag(struct wl_listener *listener, void *data);
+static void swipeupdate(struct wl_listener *listener, void *data);
 static void tag(const Arg *arg);
 static void tagmon(const Arg *arg);
 static void tile(Monitor *m);

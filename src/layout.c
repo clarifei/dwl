@@ -42,6 +42,72 @@ arrange(Monitor *m)
 }
 
 void
+pancanvas(Monitor *m, double dx, double dy)
+{
+	Client *c, *focused;
+	int move_x, move_y;
+
+	if (!ISCANVAS(m) || !m->wlr_output->enabled)
+		return;
+	if ((focused = focustop(m)) && focused->isfullscreen)
+		return;
+
+	m->canvas_remainder_x += dx;
+	m->canvas_remainder_y += dy;
+	move_x = (int)m->canvas_remainder_x;
+	move_y = (int)m->canvas_remainder_y;
+	m->canvas_remainder_x -= move_x;
+	m->canvas_remainder_y -= move_y;
+	if (!move_x && !move_y)
+		return;
+
+	m->canvas_x += move_x;
+	m->canvas_y += move_y;
+	wl_list_for_each(c, &clients, link) {
+		if (c->mon != m || client_is_unmanaged(c))
+			continue;
+		if (c->isfullscreen) {
+			c->prev.x += move_x;
+			c->prev.y += move_y;
+			continue;
+		}
+		c->geom.x += move_x;
+		c->geom.y += move_y;
+		wlr_scene_node_set_position(&c->scene->node, c->geom.x, c->geom.y);
+	}
+}
+
+void
+homecanvas(const Arg *arg)
+{
+	Client *focused;
+	int dx, dy;
+
+	if (!ISCANVAS(selmon) || ((focused = focustop(selmon)) && focused->isfullscreen))
+		return;
+	dx = -selmon->canvas_x;
+	dy = -selmon->canvas_y;
+	selmon->canvas_remainder_x = 0;
+	selmon->canvas_remainder_y = 0;
+	pancanvas(selmon, dx, dy);
+	motionnotify(0, NULL, 0, 0, 0, 0);
+}
+
+void
+centercanvas(const Arg *arg)
+{
+	Client *c;
+	int dx, dy;
+
+	if (!ISCANVAS(selmon) || !(c = focustop(selmon)) || c->isfullscreen)
+		return;
+	dx = selmon->w.x + (selmon->w.width - c->geom.width) / 2 - c->geom.x;
+	dy = selmon->w.y + (selmon->w.height - c->geom.height) / 2 - c->geom.y;
+	pancanvas(selmon, dx, dy);
+	motionnotify(0, NULL, 0, 0, 0, 0);
+}
+
+void
 focusmon(const Arg *arg)
 {
 	int i = 0, nmons = wl_list_length(&mons);
@@ -77,6 +143,7 @@ focusstack(const Arg *arg)
 	}
 	/* If only one client is visible on selmon, then c == sel */
 	focusclient(c, 1);
+	centercanvas(NULL);
 }
 
 void

@@ -4,10 +4,10 @@ Join us on our [Discord server]
 Or Matrix: [#dwl-official:matrix.org]  
 Or on our IRC channel: [#dwl on Libera Chat]
 
-dwl is a compact, hackable compositor for [Wayland] based on [wlroots]. It is
-intended to fill the same space in the Wayland world that [dwm] does in X11,
-primarily in terms of functionality, and secondarily in terms of
-philosophy. Like [dwm], dwl is:
+dwl is a compact, hackable compositor for [Wayland] based on [wlroots]. This
+fork uses dwl as the base for a pointer-first infinite canvas: windows keep
+their native size while the display moves across a continuous surface.
+Like [dwm], dwl is:
 
 - Easy to understand, hack on, and extend with patches
 - A small, domain-focused C source tree with a live Lua configuration
@@ -63,6 +63,22 @@ internal function interface live in `include/dwl.h`; client and utility helpers
 are in `include/`. Implementations are grouped under `src/` by domain: clients,
 input, layouts, outputs, sessions, runtime configuration, server lifecycle, and
 XWayland. The example configuration lives at `config/config.lua`.
+
+## Infinite canvas
+
+The default configuration exposes one canvas instead of tiled layouts or
+workspaces. New windows open in the current viewport center.
+
+- Drag empty space with the left button to pan.
+- Scroll with two fingers over empty space, or swipe with three fingers anywhere.
+- `Alt` + middle-button drag pans from anywhere.
+- `Alt` + left/right-button drag moves/resizes a window.
+- `Alt` + `Tab` cycles to and centers a window; `Alt` + `c` centers the current one.
+- `Alt` + `0` returns the canvas to its origin.
+
+`canvas.pan_speed` in the Lua configuration calibrates touchpad scrolling and
+swipes and is applied by hot reload. The canvas is currently rendered at 1:1;
+zoom and momentum are deliberately outside this first implementation.
 
 ## Configuration
 

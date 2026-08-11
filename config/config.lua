@@ -11,24 +11,23 @@ return {
     fullscreen_bg = "#000000ff",
   },
 
-  tagcount = 9,
+  canvas = {
+    pan_speed = 1.0, -- use a negative value to reverse touchpad pan direction
+  },
+
+  tagcount = 1,
 
   logging = "error", -- silent, error, info, debug
 
   layouts = {
-    { name = "tile", symbol = "[]=", arrange = "tile" },
-    { name = "floating", symbol = "><>", arrange = "floating" },
-    { name = "monocle", symbol = "[M]", arrange = "monocle" },
+    { name = "canvas", symbol = "[ ]", arrange = "canvas" },
   },
 
-  rules = {
-    { app_id = "Gimp_EXAMPLE", floating = true },
-    { app_id = "firefox_EXAMPLE", tags = 1 << 8 },
-  },
+  rules = {},
 
   monitors = {
     { name = nil, mfact = 0.55, nmaster = 1, scale = 1,
-      layout = "tile", transform = "normal", x = -1, y = -1 },
+      layout = "canvas", transform = "normal", x = -1, y = -1 },
   },
 
   keyboard = {
@@ -46,7 +45,7 @@ return {
     tap_to_click = true,
     tap_and_drag = true,
     drag_lock = true,
-    natural_scrolling = false,
+    natural_scrolling = true,
     disable_while_typing = true,
     left_handed = false,
     middle_button_emulation = false,
@@ -61,23 +60,12 @@ return {
   keys = {
     { mods = {"ALT"}, key = "p", action = "spawn", command = {"wmenu-run"} },
     { mods = {"ALT", "SHIFT"}, key = "Return", action = "spawn", command = {"foot"} },
-    { mods = {"ALT"}, key = "j", action = "focusstack", value = 1 },
-    { mods = {"ALT"}, key = "k", action = "focusstack", value = -1 },
-    { mods = {"ALT"}, key = "i", action = "incnmaster", value = 1 },
-    { mods = {"ALT"}, key = "d", action = "incnmaster", value = -1 },
-    { mods = {"ALT"}, key = "h", action = "setmfact", value = -0.05 },
-    { mods = {"ALT"}, key = "l", action = "setmfact", value = 0.05 },
-    { mods = {"ALT"}, key = "Return", action = "zoom" },
-    { mods = {"ALT"}, key = "Tab", action = "view", value = 0 },
+    { mods = {"ALT"}, key = "Tab", action = "focusstack", value = 1 },
+    { mods = {"ALT", "SHIFT"}, key = "ISO_Left_Tab", action = "focusstack", value = -1 },
+    { mods = {"ALT"}, key = "c", action = "centercanvas" },
+    { mods = {"ALT"}, key = "0", action = "homecanvas" },
     { mods = {"ALT", "SHIFT"}, key = "c", action = "killclient" },
-    { mods = {"ALT"}, key = "t", action = "setlayout", layout = "tile" },
-    { mods = {"ALT"}, key = "f", action = "setlayout", layout = "floating" },
-    { mods = {"ALT"}, key = "m", action = "setlayout", layout = "monocle" },
-    { mods = {"ALT"}, key = "space", action = "setlayout" },
-    { mods = {"ALT", "SHIFT"}, key = "space", action = "togglefloating" },
-    { mods = {"ALT"}, key = "e", action = "togglefullscreen" },
-    { mods = {"ALT"}, key = "0", action = "view", value = 0xffffffff },
-    { mods = {"ALT", "SHIFT"}, key = "parenright", action = "tag", value = 0xffffffff },
+    { mods = {"ALT"}, key = "f", action = "togglefullscreen" },
     { mods = {"ALT"}, key = "comma", action = "focusmon", value = "left" },
     { mods = {"ALT"}, key = "period", action = "focusmon", value = "right" },
     { mods = {"ALT", "SHIFT"}, key = "less", action = "tagmon", value = "left" },
@@ -99,7 +87,7 @@ return {
 
   buttons = {
     { mods = {"ALT"}, button = "left", action = "moveresize", value = "move" },
-    { mods = {"ALT"}, button = "middle", action = "togglefloating" },
+    { mods = {"ALT"}, button = "middle", action = "pan" },
     { mods = {"ALT"}, button = "right", action = "moveresize", value = "resize" },
   },
 }

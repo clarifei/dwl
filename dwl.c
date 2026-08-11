@@ -61,6 +61,7 @@ static struct wl_listener cursor_button = {.notify = buttonpress};
 static struct wl_listener cursor_frame = {.notify = cursorframe};
 static struct wl_listener cursor_motion = {.notify = motionrelative};
 static struct wl_listener cursor_motion_absolute = {.notify = motionabsolute};
+static struct wl_listener cursor_swipe_update = {.notify = swipeupdate};
 static struct wl_listener gpu_reset = {.notify = gpureset};
 static struct wl_listener layout_change = {.notify = updatemons};
 static struct wl_listener new_idle_inhibitor = {.notify = createidleinhibitor};
