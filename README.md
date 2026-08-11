@@ -71,6 +71,7 @@ workspaces. New windows open in the current viewport center.
 
 - Drag empty space with the left button to pan.
 - Scroll with two fingers over empty space, or swipe with three fingers anywhere.
+- Pinch with two fingers over empty space, or three fingers anywhere, to zoom.
 - Use the mouse wheel over empty space, or `Super` + wheel anywhere, to zoom
   around the viewport center.
 - `Super` + middle-button drag pans from anywhere.
@@ -79,10 +80,10 @@ workspaces. New windows open in the current viewport center.
   `Super` + `c` centers the active window.
 - `Super` + `-`/`=` zooms out/in; `Super` + `0` resets pan and zoom.
 
-`canvas.pan_speed`, `zoom_min`, `zoom_max`, and `zoom_step` calibrate navigation
-and are applied by hot reload. Windows keep their native logical size while the
-scene graph renders the camera transform. Zoom-in magnifies native client buffers
-with nearest filtering, avoiding client reflow and oversized repaint buffers.
+`canvas.pan_speed`, `zoom_min`, and `zoom_step` calibrate navigation and are
+applied by hot reload. Zoom is animated at the output refresh rate and capped at
+`1.0`, so zoom-in returns to the client's native resolution instead of magnifying
+its buffer. Fractional zoom uses bilinear filtering and pixel-snapped edges.
 
 ## Configuration
 

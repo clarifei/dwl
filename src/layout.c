@@ -16,12 +16,6 @@ typedef struct {
 
 static const struct wlr_addon_interface canvas_node_addon_impl;
 
-static int
-canvasscaledlength(int length, double scale)
-{
-	return length ? MAX(1, (int)round(length * scale)) : 0;
-}
-
 static void
 canvasnodebufferupdate(CanvasNodeState *state, int committed)
 {
@@ -31,12 +25,13 @@ canvasnodebufferupdate(CanvasNodeState *state, int committed)
 			buffer->dst_width, state->scaled_width, committed);
 	state->height = canvas_buffer_base_length(state->height,
 			buffer->dst_height, state->scaled_height, committed);
-	state->scaled_width = canvasscaledlength(state->width, state->scale);
-	state->scaled_height = canvasscaledlength(state->height, state->scale);
+	state->scaled_width = canvas_scaled_extent(state->x,
+			state->width, state->scale);
+	state->scaled_height = canvas_scaled_extent(state->y,
+			state->height, state->scale);
 	wlr_scene_buffer_set_dest_size(buffer,
 			state->scaled_width, state->scaled_height);
-	wlr_scene_buffer_set_filter_mode(buffer, state->scale > 1.0
-			? WLR_SCALE_FILTER_NEAREST : WLR_SCALE_FILTER_BILINEAR);
+	wlr_scene_buffer_set_filter_mode(buffer, WLR_SCALE_FILTER_BILINEAR);
 }
 
 static void
@@ -167,8 +162,10 @@ canvasnodescale(struct wlr_scene_node *node, double scale)
 			state->width = rect->width;
 			state->height = rect->height;
 		}
-		state->scaled_width = canvasscaledlength(state->width, scale);
-		state->scaled_height = canvasscaledlength(state->height, scale);
+		state->scaled_width = canvas_scaled_extent(state->x,
+				state->width, scale);
+		state->scaled_height = canvas_scaled_extent(state->y,
+				state->height, scale);
 		wlr_scene_rect_set_size(rect,
 				state->scaled_width, state->scaled_height);
 	} else if (node->type == WLR_SCENE_NODE_BUFFER) {
@@ -350,6 +347,7 @@ pancanvas(Monitor *m, double dx, double dy)
 
 	if (!dx && !dy)
 		return;
+	m->canvas_zoom_target = m->canvas_zoom;
 	m->canvas_x += dx;
 	m->canvas_y += dy;
 	updatecanvas(m, 0);
@@ -365,6 +363,7 @@ homecanvas(const Arg *arg)
 	selmon->canvas_x = 0.0;
 	selmon->canvas_y = 0.0;
 	selmon->canvas_zoom = 1.0;
+	selmon->canvas_zoom_target = 1.0;
 	updatecanvas(selmon, 1);
 	motionnotify(0, NULL, 0, 0, 0, 0);
 }
@@ -394,24 +393,63 @@ void
 zoomcanvasby(Monitor *m, double factor)
 {
 	Client *focused;
-	double anchor_x, anchor_y, old_zoom, new_zoom;
+	double base_zoom, new_zoom;
+	int was_active;
 
 	if (!ISCANVAS(m) || !isfinite(factor) || factor <= 0.0
 			|| ((focused = focustop(m)) && focused->isfullscreen))
 		return;
+	was_active = fabs(m->canvas_zoom_target - m->canvas_zoom)
+			>= CANVAS_ZOOM_EPSILON;
+	base_zoom = was_active ? m->canvas_zoom_target : m->canvas_zoom;
+	new_zoom = canvas_clamp_zoom(config.zoom_min, config.zoom_max,
+			base_zoom * factor);
+	if (new_zoom == m->canvas_zoom_target)
+		return;
+	if (!was_active)
+		clock_gettime(CLOCK_MONOTONIC, &m->canvas_zoom_frame);
+	m->canvas_zoom_target = new_zoom;
+	wlr_output_schedule_frame(m->wlr_output);
+}
+
+void
+setcanvaszoom(Monitor *m, double zoom)
+{
+	double anchor_x, anchor_y, old_zoom;
+
+	if (!m || zoom == m->canvas_zoom)
+		return;
 	anchor_x = m->w.x + m->w.width / 2.0;
 	anchor_y = m->w.y + m->w.height / 2.0;
 	old_zoom = m->canvas_zoom;
-	new_zoom = MAX(config.zoom_min, MIN(config.zoom_max, old_zoom * factor));
-	if (new_zoom == old_zoom)
-		return;
 	m->canvas_x = canvas_zoom_pan(anchor_x, m->m.x, m->canvas_x,
-			old_zoom, new_zoom);
+			old_zoom, zoom);
 	m->canvas_y = canvas_zoom_pan(anchor_y, m->m.y, m->canvas_y,
-			old_zoom, new_zoom);
-	m->canvas_zoom = new_zoom;
+			old_zoom, zoom);
+	m->canvas_zoom = zoom;
 	updatecanvas(m, 1);
 	motionnotify(0, NULL, 0, 0, 0, 0);
+}
+
+int
+tickcanvaszoom(Monitor *m, const struct timespec *now)
+{
+	double dt, new_zoom;
+
+	if (!m || fabs(m->canvas_zoom_target - m->canvas_zoom)
+			< CANVAS_ZOOM_EPSILON) {
+		if (m && m->canvas_zoom != m->canvas_zoom_target)
+			setcanvaszoom(m, m->canvas_zoom_target);
+		return 0;
+	}
+	dt = now->tv_sec - m->canvas_zoom_frame.tv_sec
+			+ (now->tv_nsec - m->canvas_zoom_frame.tv_nsec) / 1000000000.0;
+	dt = MAX(0.0, MIN(dt, 1.0 / 30.0));
+	m->canvas_zoom_frame = *now;
+	new_zoom = canvas_animate_zoom(m->canvas_zoom,
+			m->canvas_zoom_target, dt);
+	setcanvaszoom(m, new_zoom);
+	return new_zoom != m->canvas_zoom_target;
 }
 
 void

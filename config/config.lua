@@ -14,7 +14,7 @@ return {
   canvas = {
     pan_speed = 1.0,
     zoom_min = 0.25,
-    zoom_max = 4.0,
+    zoom_max = 1.0,
     zoom_step = 1.2,
   },
 

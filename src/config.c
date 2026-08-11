@@ -695,9 +695,8 @@ config_parse_canvas(lua_State *lua, Config *cfg)
 	cfg->zoom_step = config_float_field(lua, -1, "zoom_step", cfg->zoom_step);
 	if (cfg->zoom_min < 0.1f || cfg->zoom_min > 1.0f)
 		luaL_error(lua, "canvas.zoom_min must be between 0.1 and 1");
-	if (cfg->zoom_max < 1.0f || cfg->zoom_max > 8.0f
-			|| cfg->zoom_max < cfg->zoom_min)
-		luaL_error(lua, "canvas.zoom_max must be between 1 and 8 and at least zoom_min");
+	if (cfg->zoom_max != 1.0f || cfg->zoom_max < cfg->zoom_min)
+		luaL_error(lua, "canvas.zoom_max must be 1 (native resolution)");
 	if (cfg->zoom_step <= 1.0f || cfg->zoom_step > 2.0f)
 		luaL_error(lua, "canvas.zoom_step must be greater than 1 and at most 2");
 	lua_pop(lua, 1);
@@ -1211,7 +1210,7 @@ config_defaults(Config *cfg)
 	config_set_color(cfg->fullscreen_bg, 0x000000ff);
 	cfg->pan_speed = 1.0f;
 	cfg->zoom_min = 0.25f;
-	cfg->zoom_max = 4.0f;
+	cfg->zoom_max = CANVAS_NATIVE_ZOOM;
 	cfg->zoom_step = 1.2f;
 	cfg->tagcount = 1;
 	cfg->log_level = WLR_ERROR;
@@ -1508,8 +1507,10 @@ config_apply_live(const Config *old)
 		rule = config_monitor_rule(&config, m->wlr_output->name);
 		m->mfact = rule->mfact;
 		m->nmaster = rule->nmaster;
-		m->canvas_zoom = MAX(config.zoom_min,
-				MIN(config.zoom_max, m->canvas_zoom));
+		m->canvas_zoom = canvas_clamp_zoom(config.zoom_min,
+				config.zoom_max, m->canvas_zoom);
+		m->canvas_zoom_target = canvas_clamp_zoom(config.zoom_min,
+				config.zoom_max, m->canvas_zoom_target);
 		if (m->fullscreen_bg)
 			wlr_scene_rect_set_color(m->fullscreen_bg, config.fullscreen_bg);
 		wlr_output_state_init(&state);

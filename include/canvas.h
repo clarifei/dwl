@@ -4,6 +4,10 @@
 #include <math.h>
 #include <stdint.h>
 
+#define CANVAS_NATIVE_ZOOM 1.0
+#define CANVAS_ZOOM_EPSILON 0.001
+#define CANVAS_ZOOM_RESPONSE 0.18
+
 static inline double
 canvas_pan_delta(double delta, double speed)
 {
@@ -39,6 +43,34 @@ static inline double
 canvas_zoom_factor(double step, double delta)
 {
 	return pow(step, -delta / 30.0);
+}
+
+static inline double
+canvas_clamp_zoom(double min, double max, double zoom)
+{
+	return fmin(CANVAS_NATIVE_ZOOM, fmax(min, fmin(max, zoom)));
+}
+
+static inline double
+canvas_animate_zoom(double current, double target, double dt)
+{
+	double factor = 1.0 - pow(1.0 - CANVAS_ZOOM_RESPONSE,
+			fmax(0.0, dt) * 60.0);
+	double next = current + (target - current) * factor;
+
+	return fabs(target - next) < CANVAS_ZOOM_EPSILON ? target : next;
+}
+
+static inline int
+canvas_scaled_extent(int position, int length, double scale)
+{
+	int extent;
+
+	if (!length)
+		return 0;
+	extent = (int)round((position + length) * scale)
+			- (int)round(position * scale);
+	return extent > 0 ? extent : 1;
 }
 
 static inline int

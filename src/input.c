@@ -654,6 +654,67 @@ startpan(const Arg *arg)
 }
 
 void
+pinchbegin(struct wl_listener *listener, void *data)
+{
+	struct wlr_pointer_pinch_begin_event *event = data;
+	struct wlr_keyboard *keyboard;
+	struct wlr_surface *surface = NULL;
+	Client *c = NULL, *focused;
+	Monitor *m = xytomon(cursor->x, cursor->y);
+	uint32_t mods;
+
+	xytonode(cursor->x, cursor->y, &surface, &c, NULL, NULL, NULL);
+	keyboard = wlr_seat_get_keyboard(seat);
+	mods = keyboard ? wlr_keyboard_get_modifiers(keyboard) : 0;
+	if (!locked && ISCANVAS(m)
+			&& !((focused = focustop(m)) && focused->isfullscreen)
+			&& (event->fingers == 3 || (!surface && !c)
+				|| (CLEANMASK(mods) & WLR_MODIFIER_LOGO))) {
+		kb_group->release_armed = 0;
+		wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
+		pinchmon = m;
+		pinchzoom = m->canvas_zoom;
+		m->canvas_zoom_target = m->canvas_zoom;
+		return;
+	}
+	wlr_pointer_gestures_v1_send_pinch_begin(pointer_gestures, seat,
+			event->time_msec, event->fingers);
+}
+
+void
+pinchupdate(struct wl_listener *listener, void *data)
+{
+	struct wlr_pointer_pinch_update_event *event = data;
+	double zoom;
+
+	if (!pinchmon) {
+		wlr_pointer_gestures_v1_send_pinch_update(pointer_gestures, seat,
+				event->time_msec, event->dx, event->dy,
+				event->scale, event->rotation);
+		return;
+	}
+	zoom = canvas_clamp_zoom(config.zoom_min, config.zoom_max,
+			pinchzoom * event->scale);
+	setcanvaszoom(pinchmon, zoom);
+	pinchmon->canvas_zoom_target = pinchmon->canvas_zoom;
+	wlr_output_schedule_frame(pinchmon->wlr_output);
+}
+
+void
+pinchend(struct wl_listener *listener, void *data)
+{
+	struct wlr_pointer_pinch_end_event *event = data;
+
+	if (!pinchmon) {
+		wlr_pointer_gestures_v1_send_pinch_end(pointer_gestures, seat,
+				event->time_msec, event->cancelled);
+		return;
+	}
+	pinchmon->canvas_zoom_target = pinchmon->canvas_zoom;
+	pinchmon = NULL;
+}
+
+void
 swipeupdate(struct wl_listener *listener, void *data)
 {
 	struct wlr_pointer_swipe_update_event *event = data;

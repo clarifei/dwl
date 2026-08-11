@@ -38,6 +38,9 @@ cleanuplisteners(void)
 	wl_list_remove(&cursor_frame.link);
 	wl_list_remove(&cursor_motion.link);
 	wl_list_remove(&cursor_motion_absolute.link);
+	wl_list_remove(&cursor_pinch_begin.link);
+	wl_list_remove(&cursor_pinch_end.link);
+	wl_list_remove(&cursor_pinch_update.link);
 	wl_list_remove(&cursor_swipe_update.link);
 	wl_list_remove(&gpu_reset.link);
 	wl_list_remove(&new_idle_inhibitor.link);
@@ -342,8 +345,12 @@ setup(void)
 	wl_signal_add(&cursor->events.button, &cursor_button);
 	wl_signal_add(&cursor->events.axis, &cursor_axis);
 	wl_signal_add(&cursor->events.frame, &cursor_frame);
+	wl_signal_add(&cursor->events.pinch_begin, &cursor_pinch_begin);
+	wl_signal_add(&cursor->events.pinch_end, &cursor_pinch_end);
+	wl_signal_add(&cursor->events.pinch_update, &cursor_pinch_update);
 	wl_signal_add(&cursor->events.swipe_update, &cursor_swipe_update);
 
+	pointer_gestures = wlr_pointer_gestures_v1_create(dpy);
 	cursor_shape_mgr = wlr_cursor_shape_manager_v1_create(dpy, 1);
 	wl_signal_add(&cursor_shape_mgr->events.request_set_shape, &request_set_cursor_shape);
 

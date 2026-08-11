@@ -84,6 +84,8 @@ cleanupmon(struct wl_listener *listener, void *data)
 	wlr_output_layout_remove(output_layout, m->wlr_output);
 	wlr_scene_output_destroy(m->scene_output);
 
+	if (pinchmon == m)
+		pinchmon = NULL;
 	closemon(m);
 	wlr_scene_node_destroy(&m->fullscreen_bg->node);
 	free(m);
@@ -216,7 +218,7 @@ createmon(struct wl_listener *listener, void *data)
 
 	m = wlr_output->data = ecalloc(1, sizeof(*m));
 	m->wlr_output = wlr_output;
-	m->canvas_zoom = 1.0;
+	m->canvas_zoom = m->canvas_zoom_target = 1.0;
 
 	for (i = 0; i < LENGTH(m->layers); i++)
 		wl_list_init(&m->layers[i]);
@@ -453,6 +455,10 @@ rendermon(struct wl_listener *listener, void *data)
 	Client *c;
 	struct wlr_output_state pending = {0};
 	struct timespec now;
+	int zooming;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	zooming = tickcanvaszoom(m, &now);
 
 	/* Render if no XDG clients have an outstanding resize and are visible on
 	 * this monitor. */
@@ -466,8 +472,9 @@ rendermon(struct wl_listener *listener, void *data)
 
 skip:
 	/* Let clients know a frame has been rendered */
-	clock_gettime(CLOCK_MONOTONIC, &now);
 	wlr_scene_output_send_frame_done(m->scene_output, &now);
+	if (zooming)
+		wlr_output_schedule_frame(m->wlr_output);
 	wlr_output_state_finish(&pending);
 }
 

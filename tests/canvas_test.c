@@ -33,6 +33,14 @@ main(void)
 		420.25));
 	assert(canvas_zoom_factor(1.2, -30.0) > 1.0);
 	assert(canvas_zoom_factor(1.2, 30.0) < 1.0);
+	assert(close_enough(canvas_clamp_zoom(0.25, 4.0, 1.2), 1.0));
+	assert(close_enough(canvas_animate_zoom(0.5, 1.0, 1.0 / 60.0), 0.59));
+	assert(close_enough(
+		canvas_animate_zoom(canvas_animate_zoom(0.5, 1.0, 1.0 / 120.0),
+			1.0, 1.0 / 120.0),
+		canvas_animate_zoom(0.5, 1.0, 1.0 / 60.0)));
+	assert(canvas_scaled_extent(1, 2, 0.5) == 1);
+	assert(canvas_scaled_extent(1, 3, 0.5) == 1);
 	assert(canvas_buffer_base_length(800, 1200, 1200, 1) == 1200);
 	assert(canvas_buffer_base_length(800, 1200, 1200, 0) == 800);
 	assert(canvas_buffer_base_length(800, 900, 1200, 0) == 900);
