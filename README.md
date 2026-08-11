@@ -97,7 +97,9 @@ The parser validates a complete temporary configuration before swapping it into
 the compositor. A syntax or validation error is logged and the last valid
 configuration stays active. Appearance, layouts, monitor geometry, keyboard
 bindings, pointer bindings, keyboard settings, and rules are represented in the
-declarative file; rules apply to newly mapped clients.
+declarative file. Set `on_release = true` on a key binding when its action must
+run on key release instead of key press. Pressing another key or using the
+pointer while it is held cancels that action; rules apply to newly mapped clients.
 
 As in the [dwm] community, we encourage users to share patches they have
 created. Check out the [dwl-patches] repository!

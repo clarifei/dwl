@@ -112,13 +112,14 @@ config_append_monrule(Config *cfg, const char *name, float mfact, int nmaster,
 
 static void
 config_append_key(Config *cfg, uint32_t mod, xkb_keysym_t keysym,
-		ConfigAction action, Arg arg)
+		int on_release, ConfigAction action, Arg arg)
 {
 	cfg->keys = config_realloc(cfg->keys,
 			(cfg->key_count + 1) * sizeof(*cfg->keys));
 	cfg->keys[cfg->key_count++] = (Key){
 		.mod = mod,
 		.keysym = keysym,
+		.on_release = on_release,
 		.func = action,
 		.arg = arg,
 	};
@@ -474,6 +475,7 @@ config_parse_key(lua_State *lua, Config *cfg, int index, int button)
 	unsigned int button_code = 0;
 	xkb_keysym_t keysym;
 	uint32_t mods;
+	int on_release;
 	lua_Integer integer;
 
 	luaL_checktype(lua, index, LUA_TTABLE);
@@ -506,8 +508,13 @@ config_parse_key(lua_State *lua, Config *cfg, int index, int button)
 		lua_pop(lua, 1);
 		config_append_button(cfg, mods, button_code, action, arg);
 	} else {
+		lua_getfield(lua, index, "on_release");
+		if (!lua_isnil(lua, -1) && !lua_isboolean(lua, -1))
+			luaL_error(lua, "on_release must be boolean");
+		on_release = lua_toboolean(lua, -1);
+		lua_pop(lua, 1);
 		keysym = config_keysym(lua, index);
-		config_append_key(cfg, mods, keysym, action, arg);
+		config_append_key(cfg, mods, keysym, on_release, action, arg);
 	}
 }
 
@@ -1176,7 +1183,7 @@ static void
 config_default_key(Config *cfg, uint32_t mod, xkb_keysym_t keysym,
 		ConfigAction action, Arg arg)
 {
-	config_append_key(cfg, mod, keysym, action, arg);
+	config_append_key(cfg, mod, keysym, 0, action, arg);
 }
 
 static void
@@ -1228,9 +1235,9 @@ config_defaults(Config *cfg)
 	config_append_monrule(cfg, NULL, 0.55f, 1, 1.0f,
 			&cfg->layouts[0], WL_OUTPUT_TRANSFORM_NORMAL, -1, -1);
 
-	config_append_key(cfg, mod, XKB_KEY_p, spawn,
+	config_append_key(cfg, mod, XKB_KEY_p, 0, spawn,
 			(Arg){.v = config_exec("wmenu-run")});
-	config_append_key(cfg, mod, XKB_KEY_Return, spawn,
+	config_append_key(cfg, mod, XKB_KEY_Return, 0, spawn,
 			(Arg){.v = config_exec("foot")});
 	config_default_key(cfg, WLR_MODIFIER_ALT, XKB_KEY_Tab, focusstack, (Arg){.i = 1});
 	config_default_key(cfg, WLR_MODIFIER_ALT | WLR_MODIFIER_SHIFT, XKB_KEY_ISO_Left_Tab,

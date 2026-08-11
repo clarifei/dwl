@@ -160,6 +160,7 @@ typedef struct {
 typedef struct {
 	uint32_t mod;
 	xkb_keysym_t keysym;
+	int on_release;
 	void (*func)(const Arg *);
 	Arg arg;
 } Key;
@@ -170,6 +171,8 @@ typedef struct {
 	int nsyms;
 	const xkb_keysym_t *keysyms; /* invalid if nsyms == 0 */
 	uint32_t mods; /* invalid if nsyms == 0 */
+	uint32_t release_keycode;
+	int release_armed;
 	struct wl_event_source *key_repeat_source;
 
 	struct wl_listener modifiers;
@@ -370,7 +373,8 @@ static void handlesig(int signo);
 static void homecanvas(const Arg *arg);
 static void incnmaster(const Arg *arg);
 static void inputdevice(struct wl_listener *listener, void *data);
-static int keybinding(uint32_t mods, xkb_keysym_t sym);
+static int keybinding(uint32_t mods, xkb_keysym_t sym, int on_release, int run);
+static uint32_t keymod(xkb_keysym_t sym);
 static void keypress(struct wl_listener *listener, void *data);
 static void keypressmod(struct wl_listener *listener, void *data);
 static int keyrepeat(void *data);

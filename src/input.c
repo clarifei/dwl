@@ -16,6 +16,7 @@ axisnotify(struct wl_listener *listener, void *data)
 	int wheel;
 
 	wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
+	kb_group->release_armed = 0;
 	xytonode(cursor->x, cursor->y, &surface, &c, NULL, NULL, NULL);
 	keyboard = wlr_seat_get_keyboard(seat);
 	mods = keyboard ? wlr_keyboard_get_modifiers(keyboard) : 0;
@@ -59,6 +60,7 @@ buttonpress(struct wl_listener *listener, void *data)
 
 	switch (event->state) {
 	case WL_POINTER_BUTTON_STATE_PRESSED:
+		kb_group->release_armed = 0;
 		cursor_mode = CurPressed;
 		selmon = xytomon(cursor->x, cursor->y);
 		if (locked)
@@ -321,7 +323,7 @@ inputdevice(struct wl_listener *listener, void *data)
 }
 
 int
-keybinding(uint32_t mods, xkb_keysym_t sym)
+keybinding(uint32_t mods, xkb_keysym_t sym, int on_release, int run)
 {
 	/*
 	 * Here we handle compositor keybindings. This is when the compositor is
@@ -332,12 +334,35 @@ keybinding(uint32_t mods, xkb_keysym_t sym)
 	for (k = config.keys; k < config.keys + config.key_count; k++) {
 		if (CLEANMASK(mods) == CLEANMASK(k->mod)
 				&& xkb_keysym_to_lower(sym) == xkb_keysym_to_lower(k->keysym)
+				&& k->on_release == on_release
 				&& k->func) {
-			k->func(&k->arg);
+			if (run)
+				k->func(&k->arg);
 			return 1;
 		}
 	}
 	return 0;
+}
+
+uint32_t
+keymod(xkb_keysym_t sym)
+{
+	switch (sym) {
+	case XKB_KEY_Shift_L:
+	case XKB_KEY_Shift_R:
+		return WLR_MODIFIER_SHIFT;
+	case XKB_KEY_Control_L:
+	case XKB_KEY_Control_R:
+		return WLR_MODIFIER_CTRL;
+	case XKB_KEY_Alt_L:
+	case XKB_KEY_Alt_R:
+		return WLR_MODIFIER_ALT;
+	case XKB_KEY_Super_L:
+	case XKB_KEY_Super_R:
+		return WLR_MODIFIER_LOGO;
+	default:
+		return 0;
+	}
 }
 
 void
@@ -355,19 +380,39 @@ keypress(struct wl_listener *listener, void *data)
 	int nsyms = xkb_state_key_get_syms(
 			group->wlr_group->keyboard.xkb_state, keycode, &syms);
 
-	int handled = 0;
+	int handled = 0, matched, repeatable = 0;
+	int pressed = event->state == WL_KEYBOARD_KEY_STATE_PRESSED;
 	uint32_t mods = wlr_keyboard_get_modifiers(&group->wlr_group->keyboard);
 
 	wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
 
-	/* On _press_ if there is no active screen locker,
-	 * attempt to process a compositor keybinding. */
-	if (!locked && event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
-		for (i = 0; i < nsyms; i++)
-			handled = keybinding(mods, syms[i]) || handled;
+	/* Arm release bindings only while their key is used alone. */
+	if (!locked) {
+		if (pressed && group->release_armed
+				&& group->release_keycode != event->keycode)
+			group->release_armed = 0;
+		for (i = 0; i < nsyms; i++) {
+			if (pressed) {
+				matched = keybinding(mods, syms[i], 0, 1);
+				handled = matched || handled;
+				repeatable = matched || repeatable;
+				if (keybinding(mods & ~keymod(syms[i]), syms[i], 1, 0)) {
+					group->release_keycode = event->keycode;
+					group->release_armed = 1;
+					handled = 1;
+				}
+			} else if (group->release_armed
+					&& group->release_keycode == event->keycode) {
+				handled = keybinding(mods & ~keymod(syms[i]),
+						syms[i], 1, 1) || handled;
+			}
+		}
 	}
+	if (!pressed && group->release_keycode == event->keycode)
+		group->release_armed = 0;
 
-	if (handled && group->wlr_group->keyboard.repeat_info.delay > 0) {
+	if (repeatable
+			&& group->wlr_group->keyboard.repeat_info.delay > 0) {
 		group->mods = mods;
 		group->keysyms = syms;
 		group->nsyms = nsyms;
@@ -412,7 +457,7 @@ keyrepeat(void *data)
 			1000 / group->wlr_group->keyboard.repeat_info.rate);
 
 	for (i = 0; i < group->nsyms; i++)
-		keybinding(group->mods, group->keysyms[i]);
+		keybinding(group->mods, group->keysyms[i], 0, 1);
 
 	return 0;
 }
@@ -616,6 +661,7 @@ swipeupdate(struct wl_listener *listener, void *data)
 
 	if (locked || event->fingers != 3)
 		return;
+	kb_group->release_armed = 0;
 	m = xytomon(cursor->x, cursor->y);
 	wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
 	pancanvas(m, canvas_pan_delta(event->dx, config.pan_speed),
