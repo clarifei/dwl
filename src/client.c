@@ -1,6 +1,21 @@
 /* See LICENSE file for copyright and license details. */
 /* Client lifecycle, focus, rules, geometry, and decoration handling. */
 
+typedef struct {
+	struct wl_listener commit;
+	struct wl_listener destroy;
+} PopupListener;
+
+static void
+destroypopuplistener(struct wl_listener *listener, void *data)
+{
+	PopupListener *popup_listener = wl_container_of(listener, popup_listener, destroy);
+
+	wl_list_remove(&popup_listener->commit.link);
+	wl_list_remove(&popup_listener->destroy.link);
+	free(popup_listener);
+}
+
 void
 applybounds(Client *c, struct wlr_box *bbox)
 {
@@ -84,6 +99,7 @@ commitnotify(struct wl_listener *listener, void *data)
 void
 commitpopup(struct wl_listener *listener, void *data)
 {
+	PopupListener *popup_listener = wl_container_of(listener, popup_listener, commit);
 	struct wlr_surface *surface = data;
 	struct wlr_xdg_popup *popup = wlr_xdg_popup_try_from_wlr_surface(surface);
 	LayerSurface *l = NULL;
@@ -112,8 +128,7 @@ commitpopup(struct wl_listener *listener, void *data)
 	wlr_xdg_popup_unconstrain_from_box(popup, &box);
 	if (c)
 		clientsceneupdate(c);
-	wl_list_remove(&listener->link);
-	free(listener);
+	destroypopuplistener(&popup_listener->destroy, NULL);
 }
 
 void
@@ -156,7 +171,10 @@ createpopup(struct wl_listener *listener, void *data)
 	/* This event is raised when a client (either xdg-shell or layer-shell)
 	 * creates a new popup. */
 	struct wlr_xdg_popup *popup = data;
-	LISTEN_STATIC(&popup->base->surface->events.commit, commitpopup);
+	PopupListener *popup_listener = ecalloc(1, sizeof(*popup_listener));
+
+	LISTEN(&popup->base->surface->events.commit, &popup_listener->commit, commitpopup);
+	LISTEN(&popup->events.destroy, &popup_listener->destroy, destroypopuplistener);
 }
 
 void
