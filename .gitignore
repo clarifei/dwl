@@ -1,5 +1,4 @@
 inca
-dwl
 tests/canvas_test
 *.o
 *-protocol.c
