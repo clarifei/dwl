@@ -79,7 +79,7 @@ gpureset(struct wl_listener *listener, void *data)
 	struct wlr_renderer *old_drw = drw;
 	struct wlr_allocator *old_alloc = alloc;
 	struct Monitor *m;
-	if (!(drw = wlr_renderer_autocreate(backend)))
+	if (!(drw = fx_renderer_create(backend)))
 		die("couldn't recreate renderer");
 
 	if (!(alloc = wlr_allocator_autocreate(backend, drw)))
@@ -92,6 +92,7 @@ gpureset(struct wl_listener *listener, void *data)
 
 	wl_list_for_each(m, &mons, link) {
 		wlr_output_init_render(m->wlr_output, alloc, drw);
+		monitorblurdirty(m);
 	}
 
 	wlr_allocator_destroy(old_alloc);
@@ -200,6 +201,11 @@ setup(void)
 
 	/* Initialize the scene graph used to lay out windows */
 	scene = wlr_scene_create();
+	wlr_scene_set_blur_data(scene,
+			config.blur_enabled ? config.blur_passes : 0,
+			config.blur_enabled ? config.blur_radius : 0,
+			config.blur_noise, config.blur_brightness,
+			config.blur_contrast, config.blur_saturation);
 	root_bg = wlr_scene_rect_create(&scene->tree, 0, 0, config.rootcolor);
 	for (i = 0; i < NUM_LAYERS; i++)
 		layers[i] = wlr_scene_tree_create(&scene->tree);
@@ -210,7 +216,7 @@ setup(void)
 	 * can also specify a renderer using the WLR_RENDERER env var.
 	 * The renderer is responsible for defining the various pixel formats it
 	 * supports for shared memory, this configures that for clients. */
-	if (!(drw = wlr_renderer_autocreate(backend)))
+	if (!(drw = fx_renderer_create(backend)))
 		die("couldn't create renderer");
 	wl_signal_add(&drw->events.lost, &gpu_reset);
 

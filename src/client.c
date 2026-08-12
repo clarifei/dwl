@@ -11,6 +11,133 @@ typedef struct {
 	cairo_surface_t *surface;
 } CollapsedBuffer;
 
+typedef struct {
+	Client *client;
+	struct wlr_scene_buffer *buffer;
+} ClientEffectLookup;
+
+static void
+clienteffectbuffer(struct wlr_scene_buffer *buffer, int sx, int sy, void *data)
+{
+	ClientEffectLookup *lookup = data;
+	struct wlr_scene_surface *surface = wlr_scene_surface_try_from_buffer(buffer);
+
+	if (!lookup->buffer && surface
+			&& surface->surface == client_surface(lookup->client))
+		lookup->buffer = buffer;
+}
+
+static void
+clientbordergeometry(Client *c, double scale)
+{
+	int inner_width, inner_height, radius;
+	enum corner_location corners;
+
+	if (!c->border)
+		return;
+	inner_width = MAX(0, (int)round((c->geom.width - 2 * (int)c->bw) * scale));
+	inner_height = MAX(0, (int)round((c->geom.height - 2 * (int)c->bw) * scale));
+	radius = c->isfullscreen ? 0 : MIN((int)round(config.corner_radius * scale),
+			MIN(inner_width, inner_height) / 2);
+	corners = radius ? CORNER_LOCATION_ALL : CORNER_LOCATION_NONE;
+	wlr_scene_node_set_enabled(&c->border->node, c->bw > 0);
+	wlr_scene_rect_set_size(c->border,
+			MAX(1, (int)round(c->geom.width * scale)),
+			MAX(1, (int)round(c->geom.height * scale)));
+	wlr_scene_rect_set_corner_radius(c->border,
+			radius + (int)round(c->bw * scale), corners);
+	wlr_scene_rect_set_clipped_region(c->border, (struct clipped_region){
+		.area = {
+			(int)round(c->bw * scale), (int)round(c->bw * scale),
+			inner_width, inner_height,
+		},
+		.corner_radius = radius,
+		.corners = corners,
+	});
+}
+
+void
+clientshadowgeometry(Client *c, double scale)
+{
+	float sigma;
+	int height, offset_x, offset_y, padding, radius, width;
+
+	if (!c || !c->shadow)
+		return;
+	width = MAX(1, (int)round(c->geom.width * scale));
+	height = MAX(1, (int)round(c->geom.height * scale));
+	sigma = MAX(0.0f, (float)(config.shadow_sigma * scale));
+	padding = (int)ceil(sigma);
+	offset_x = (int)round(config.shadow_offset_x * scale);
+	offset_y = (int)round(config.shadow_offset_y * scale);
+	radius = MAX(0, (int)round((config.corner_radius + c->bw) * scale));
+	wlr_scene_node_set_position(&c->shadow->node,
+			offset_x - padding, offset_y - padding);
+	wlr_scene_shadow_set_size(c->shadow,
+			width + 2 * padding, height + 2 * padding);
+	wlr_scene_shadow_set_corner_radius(c->shadow, radius);
+	wlr_scene_shadow_set_blur_sigma(c->shadow, (float)sigma);
+	wlr_scene_shadow_set_clipped_region(c->shadow, (struct clipped_region){
+		.area = {padding - offset_x, padding - offset_y, width, height},
+		.corner_radius = radius,
+		.corners = radius ? CORNER_LOCATION_ALL : CORNER_LOCATION_NONE,
+	});
+}
+
+void
+clienteffectsupdate(Client *c)
+{
+	ClientEffectLookup lookup;
+	double scale;
+	float opacity;
+	int enabled, focused, radius;
+
+	if (!c || !c->scene || client_is_unmanaged(c))
+		return;
+	if (!c->effect_buffer) {
+		lookup = (ClientEffectLookup){.client = c};
+		wlr_scene_node_for_each_buffer(&c->scene_surface->node,
+				clienteffectbuffer, &lookup);
+		c->effect_buffer = lookup.buffer;
+	}
+	enabled = !c->isfullscreen;
+	focused = c->mon && focustop(c->mon) == c;
+	scale = clientcanvasscale(c);
+	radius = enabled ? MIN((int)round(config.corner_radius * scale),
+			MIN(MAX(0, (int)round((c->geom.width - 2 * (int)c->bw) * scale)),
+					MAX(0, (int)round((c->geom.height - 2 * (int)c->bw) * scale))) / 2) : 0;
+	opacity = config.opacity_enabled && enabled
+			? (focused ? config.opacity_active : config.opacity_inactive) : 1.0f;
+	if (c->effect_buffer) {
+		wlr_scene_buffer_set_opacity(c->effect_buffer, opacity);
+		wlr_scene_buffer_set_corner_radius(c->effect_buffer,
+				radius, radius
+						? CORNER_LOCATION_ALL : CORNER_LOCATION_NONE);
+		wlr_scene_buffer_set_backdrop_blur(c->effect_buffer,
+				enabled && config.blur_enabled);
+		wlr_scene_buffer_set_backdrop_blur_optimized(c->effect_buffer,
+				enabled && config.blur_enabled && config.blur_optimized
+						&& c->mon && c->mon->optimized_blur);
+		wlr_scene_buffer_set_backdrop_blur_ignore_transparent(c->effect_buffer,
+				config.blur_ignore_transparent);
+	}
+	clientbordergeometry(c, scale);
+	if (!config.shadow_enabled && c->shadow) {
+		wlr_scene_node_destroy(&c->shadow->node);
+		c->shadow = NULL;
+	} else if (enabled && config.shadow_enabled && !c->shadow) {
+		c->shadow = wlr_scene_shadow_create(c->scene, 0, 0,
+				config.corner_radius, config.shadow_sigma, config.shadow_color);
+		if (c->shadow)
+			wlr_scene_node_lower_to_bottom(&c->shadow->node);
+	}
+	if (c->shadow) {
+		wlr_scene_shadow_set_color(c->shadow, config.shadow_color);
+		wlr_scene_node_set_enabled(&c->shadow->node, enabled);
+		clientshadowgeometry(c, scale);
+	}
+}
+
 static void
 collapsedbufferdestroy(struct wlr_buffer *wlr_buffer)
 {
@@ -371,8 +498,10 @@ focusclient(Client *c, int lift)
 
 		/* Don't change border color if there is an exclusive focus or we are
 		 * handling a drag operation */
-		if (!exclusive_focus && !seat->drag)
+		if (!exclusive_focus && !seat->drag) {
 			client_set_border_color(c, config.focuscolor);
+		}
+		clienteffectsupdate(c);
 	}
 
 	/* Deactivate old client if focus is changing */
@@ -390,6 +519,7 @@ focusclient(Client *c, int lift)
 		 * and probably other clients */
 		} else if (old_c && !client_is_unmanaged(old_c) && (!c || !client_wants_focus(c))) {
 			client_set_border_color(old_c, config.bordercolor);
+			clienteffectsupdate(old_c);
 
 			client_activate_surface(old, 0);
 		}
@@ -451,7 +581,6 @@ mapnotify(struct wl_listener *listener, void *data)
 	Client *w, *c = wl_container_of(listener, c, map);
 	Monitor *m;
 	double world_x, world_y;
-	int i;
 
 	/* Create scene tree for this client and its border */
 	c->scene = client_surface(c)->data = wlr_scene_tree_create(layers[LyrTile]);
@@ -477,11 +606,10 @@ mapnotify(struct wl_listener *listener, void *data)
 		goto unset_fullscreen;
 	}
 
-	for (i = 0; i < 4; i++) {
-		c->border[i] = wlr_scene_rect_create(c->scene, 0, 0,
-				c->isurgent ? config.urgentcolor : config.bordercolor);
-		c->border[i]->node.data = c;
-	}
+	c->border = wlr_scene_rect_create(c->scene, 0, 0,
+			c->isurgent ? config.urgentcolor : config.bordercolor);
+	c->border->node.data = c;
+	wlr_scene_node_lower_to_bottom(&c->border->node);
 	/* Initialize client geometry with room for border */
 	client_set_tiled(c, WLR_EDGE_TOP | WLR_EDGE_BOTTOM | WLR_EDGE_LEFT | WLR_EDGE_RIGHT);
 	c->geom.width += 2 * c->bw;
@@ -514,6 +642,7 @@ mapnotify(struct wl_listener *listener, void *data)
 		}, 1);
 		clientsettle(c);
 	}
+	clienteffectsupdate(c);
 	printstatus();
 
 unset_fullscreen:
@@ -570,14 +699,6 @@ resize(Client *c, struct wlr_box geo, int interact)
 	/* Update scene-graph, including borders */
 	wlr_scene_node_set_position(&c->scene->node, c->geom.x, c->geom.y);
 	wlr_scene_node_set_position(&c->scene_surface->node, c->bw, c->bw);
-	wlr_scene_rect_set_size(c->border[0], c->geom.width, c->bw);
-	wlr_scene_rect_set_size(c->border[1], c->geom.width, c->bw);
-	wlr_scene_rect_set_size(c->border[2], c->bw, c->geom.height - 2 * c->bw);
-	wlr_scene_rect_set_size(c->border[3], c->bw, c->geom.height - 2 * c->bw);
-	wlr_scene_node_set_position(&c->border[1]->node, 0, c->geom.height - c->bw);
-	wlr_scene_node_set_position(&c->border[2]->node, 0, c->bw);
-	wlr_scene_node_set_position(&c->border[3]->node, c->geom.width - c->bw, c->bw);
-
 	/* this is a no-op if size hasn't changed */
 	c->resize = client_set_size(c, c->geom.width - 2 * c->bw,
 			c->geom.height - 2 * c->bw);
@@ -704,6 +825,9 @@ unmapnotify(struct wl_listener *listener, void *data)
 	}
 
 	wlr_scene_node_destroy(&c->scene->node);
+	c->border = NULL;
+	c->effect_buffer = NULL;
+	c->shadow = NULL;
 	c->collapsed_bg = NULL;
 	c->collapsed_label = NULL;
 	printstatus();

@@ -11,6 +11,33 @@ return {
     fullscreen_bg = "#000000ff",
   },
 
+  effects = {
+    corner_radius = 8,
+    opacity = {
+      enabled = true,
+      active = 0.90,
+      inactive = 0.80,
+    },
+    shadow = {
+      enabled = true,
+      sigma = 18,
+      offset_x = 0,
+      offset_y = 6,
+      color = "#00000066",
+    },
+    blur = {
+      enabled = true,
+      optimized = true,
+      passes = 2,
+      radius = 4,
+      noise = 0,
+      brightness = 0.9,
+      contrast = 0.9,
+      saturation = 1.1,
+      ignore_transparent = true,
+    },
+  },
+
   canvas = {
     pan_speed = 1.0,
     zoom_min = 0.25,

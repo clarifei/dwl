@@ -12,7 +12,7 @@ DWLDEVCFLAGS = -g -Wpedantic -Wall -Wextra -Wdeclaration-after-statement \
 	-Wfloat-conversion
 
 # CFLAGS / LDFLAGS
-PKGS      = wayland-server xkbcommon libinput lua5.4 cairo fontconfig libdrm $(XLIBS)
+PKGS      = scenefx-0.4 wayland-server xkbcommon libinput lua5.4 cairo fontconfig libdrm $(XLIBS)
 DWLCFLAGS = `$(PKG_CONFIG) --cflags $(PKGS)` $(WLR_INCS) $(DWLCPPFLAGS) $(DWLDEVCFLAGS) $(CFLAGS)
 LDLIBS    = `$(PKG_CONFIG) --libs $(PKGS)` $(WLR_LIBS) -lm $(LIBS)
 DWL_SRC   = dwl.c include/dwl.h include/canvas.h include/client.h include/util.h src/client.c src/input.c src/layout.c \

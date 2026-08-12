@@ -552,7 +552,8 @@ config_parse_color(lua_State *lua, int index, float color[4], const char *name)
 		lua_rawgeti(lua, index, (lua_Integer)i);
 		color[i - 1] = (float)luaL_checknumber(lua, -1);
 		lua_pop(lua, 1);
-		if (color[i - 1] < 0.0f || color[i - 1] > 1.0f)
+		if (!isfinite(color[i - 1])
+				|| color[i - 1] < 0.0f || color[i - 1] > 1.0f)
 			luaL_error(lua, "%s color channels must be between 0 and 1", name);
 	}
 }
@@ -678,6 +679,95 @@ config_parse_appearance(lua_State *lua, Config *cfg)
 	config_color_field(lua, -1, "urgentcolor", cfg->urgentcolor);
 	config_color_field(lua, -1, "fullscreen_bg", cfg->fullscreen_bg);
 	lua_pop(lua, 1);
+}
+
+
+static void
+config_parse_effects(lua_State *lua, Config *cfg)
+{
+	lua_getfield(lua, 1, "effects");
+	if (lua_isnil(lua, -1)) {
+		lua_pop(lua, 1);
+		return;
+	}
+	luaL_checktype(lua, -1, LUA_TTABLE);
+	cfg->corner_radius = config_int_field(lua, -1,
+			"corner_radius", cfg->corner_radius);
+	if (cfg->corner_radius < 0 || cfg->corner_radius > 128)
+		luaL_error(lua, "effects.corner_radius must be between 0 and 128");
+
+	lua_getfield(lua, -1, "opacity");
+	if (!lua_isnil(lua, -1)) {
+		luaL_checktype(lua, -1, LUA_TTABLE);
+		cfg->opacity_enabled = config_bool_field(lua, -1,
+				"enabled", cfg->opacity_enabled);
+		cfg->opacity_active = config_float_field(lua, -1,
+				"active", cfg->opacity_active);
+		cfg->opacity_inactive = config_float_field(lua, -1,
+				"inactive", cfg->opacity_inactive);
+		if (!isfinite(cfg->opacity_active) || !isfinite(cfg->opacity_inactive)
+				|| cfg->opacity_active < 0.0f || cfg->opacity_active > 1.0f
+				|| cfg->opacity_inactive < 0.0f || cfg->opacity_inactive > 1.0f)
+			luaL_error(lua, "effects.opacity values must be between 0 and 1");
+	}
+	lua_pop(lua, 1);
+
+	lua_getfield(lua, -1, "shadow");
+	if (!lua_isnil(lua, -1)) {
+		luaL_checktype(lua, -1, LUA_TTABLE);
+		cfg->shadow_enabled = config_bool_field(lua, -1,
+				"enabled", cfg->shadow_enabled);
+		cfg->shadow_sigma = config_float_field(lua, -1,
+				"sigma", cfg->shadow_sigma);
+		cfg->shadow_offset_x = config_int_field(lua, -1,
+				"offset_x", cfg->shadow_offset_x);
+		cfg->shadow_offset_y = config_int_field(lua, -1,
+				"offset_y", cfg->shadow_offset_y);
+		config_color_field(lua, -1, "color", cfg->shadow_color);
+		if (!isfinite(cfg->shadow_sigma) || cfg->shadow_sigma < 0.0f
+				|| cfg->shadow_sigma > 128.0f)
+			luaL_error(lua, "effects.shadow.sigma must be between 0 and 128");
+		if (cfg->shadow_offset_x < -256 || cfg->shadow_offset_x > 256
+				|| cfg->shadow_offset_y < -256 || cfg->shadow_offset_y > 256)
+			luaL_error(lua, "effects.shadow offsets must be between -256 and 256");
+	}
+	lua_pop(lua, 1);
+
+	lua_getfield(lua, -1, "blur");
+	if (!lua_isnil(lua, -1)) {
+		luaL_checktype(lua, -1, LUA_TTABLE);
+		cfg->blur_enabled = config_bool_field(lua, -1,
+				"enabled", cfg->blur_enabled);
+		cfg->blur_optimized = config_bool_field(lua, -1,
+				"optimized", cfg->blur_optimized);
+		cfg->blur_passes = config_int_field(lua, -1,
+				"passes", cfg->blur_passes);
+		cfg->blur_radius = config_int_field(lua, -1,
+				"radius", cfg->blur_radius);
+		cfg->blur_noise = config_float_field(lua, -1,
+				"noise", cfg->blur_noise);
+		cfg->blur_brightness = config_float_field(lua, -1,
+				"brightness", cfg->blur_brightness);
+		cfg->blur_contrast = config_float_field(lua, -1,
+				"contrast", cfg->blur_contrast);
+		cfg->blur_saturation = config_float_field(lua, -1,
+				"saturation", cfg->blur_saturation);
+		cfg->blur_ignore_transparent = config_bool_field(lua, -1,
+				"ignore_transparent", cfg->blur_ignore_transparent);
+		if (cfg->blur_passes < 1 || cfg->blur_passes > 8
+				|| cfg->blur_radius < 1 || cfg->blur_radius > 64)
+			luaL_error(lua, "effects.blur passes must be 1..8 and radius 1..64");
+		if (!isfinite(cfg->blur_noise) || cfg->blur_noise < 0.0f
+				|| cfg->blur_noise > 1.0f)
+			luaL_error(lua, "effects.blur.noise must be between 0 and 1");
+		if (!isfinite(cfg->blur_brightness) || !isfinite(cfg->blur_contrast)
+				|| !isfinite(cfg->blur_saturation)
+				|| cfg->blur_brightness < 0.0f || cfg->blur_brightness > 2.0f
+				|| cfg->blur_contrast < 0.0f || cfg->blur_contrast > 2.0f
+				|| cfg->blur_saturation < 0.0f || cfg->blur_saturation > 2.0f)
+			luaL_error(lua, "effects.blur color values must be between 0 and 2");
+	}
+	lua_pop(lua, 2);
 }
 
 static void
@@ -1158,6 +1248,7 @@ config_parse_root(lua_State *lua, Config *cfg)
 
 	luaL_checktype(lua, 1, LUA_TTABLE);
 	config_parse_appearance(lua, cfg);
+	config_parse_effects(lua, cfg);
 	config_parse_canvas(lua, cfg);
 	config_parse_logging(lua, cfg);
 	cfg->tagcount = config_int_field(lua, 1, "tagcount", cfg->tagcount);
@@ -1234,6 +1325,24 @@ config_defaults(Config *cfg)
 	config_set_color(cfg->focuscolor, 0x005577ff);
 	config_set_color(cfg->urgentcolor, 0xff0000ff);
 	config_set_color(cfg->fullscreen_bg, 0x000000ff);
+	cfg->corner_radius = 8;
+	cfg->opacity_enabled = 0;
+	cfg->opacity_active = 1.0f;
+	cfg->opacity_inactive = 1.0f;
+	cfg->shadow_enabled = 0;
+	cfg->shadow_sigma = 18.0f;
+	cfg->shadow_offset_x = 0;
+	cfg->shadow_offset_y = 6;
+	config_set_color(cfg->shadow_color, 0x00000066);
+	cfg->blur_enabled = 0;
+	cfg->blur_optimized = 1;
+	cfg->blur_passes = 2;
+	cfg->blur_radius = 4;
+	cfg->blur_noise = 0.0f;
+	cfg->blur_brightness = 0.9f;
+	cfg->blur_contrast = 0.9f;
+	cfg->blur_saturation = 1.1f;
+	cfg->blur_ignore_transparent = 1;
 	cfg->pan_speed = 1.0f;
 	cfg->zoom_min = 0.25f;
 	cfg->zoom_max = CANVAS_NATIVE_ZOOM;
@@ -1531,6 +1640,12 @@ config_apply_live(const Config *old)
 	wlr_log_init(config.log_level, NULL);
 	if (root_bg)
 		wlr_scene_rect_set_color(root_bg, config.rootcolor);
+	if (scene)
+		wlr_scene_set_blur_data(scene,
+				config.blur_enabled ? config.blur_passes : 0,
+				config.blur_enabled ? config.blur_radius : 0,
+				config.blur_noise, config.blur_brightness,
+				config.blur_contrast, config.blur_saturation);
 	wl_list_for_each(m, &mons, link) {
 		for (i = 0; i < 2; i++) {
 			name = (old && m->lt[i]) ? m->lt[i]->name : NULL;
@@ -1546,6 +1661,8 @@ config_apply_live(const Config *old)
 				config.zoom_max, m->canvas_zoom_target);
 		if (m->fullscreen_bg)
 			wlr_scene_rect_set_color(m->fullscreen_bg, config.fullscreen_bg);
+		monitorblurupdate(m);
+		monitorblurdirty(m);
 		wlr_output_state_init(&state);
 		wlr_output_state_set_scale(&state, rule->scale);
 		wlr_output_state_set_transform(&state, rule->rr);

@@ -2,6 +2,62 @@
 /* Output lifecycle, layer shell, rendering, and status reporting. */
 
 void
+monitorblurdirty(Monitor *m)
+{
+	if (!m || !m->optimized_blur || m->optimized_blur->dirty)
+		return;
+	if (!m->optimized_blur->node.enabled) {
+		m->optimized_blur->dirty = true;
+		return;
+	}
+	wlr_scene_optimized_blur_mark_dirty(m->optimized_blur);
+}
+
+void
+monitorblurupdate(Monitor *m)
+{
+	Client *c;
+	int created = 0;
+	int enabled = config.blur_enabled && config.blur_optimized;
+	int fullscreen = 0;
+	int moved;
+	int was_enabled;
+
+	if (!m)
+		return;
+	if (!enabled) {
+		if (m->optimized_blur) {
+			wlr_scene_node_destroy(&m->optimized_blur->node);
+			m->optimized_blur = NULL;
+		}
+		return;
+	}
+	wl_list_for_each(c, &clients, link) {
+		if (VISIBLEON(c, m) && c->isfullscreen && client_surface(c)->mapped) {
+			fullscreen = 1;
+			break;
+		}
+	}
+	if (!m->optimized_blur) {
+		m->optimized_blur = wlr_scene_optimized_blur_create(layers[LyrBlur],
+				MAX(0, m->m.width), MAX(0, m->m.height));
+		created = m->optimized_blur != NULL;
+	}
+	if (!m->optimized_blur)
+		return;
+
+	was_enabled = m->optimized_blur->node.enabled;
+	moved = m->optimized_blur->node.x != m->m.x
+			|| m->optimized_blur->node.y != m->m.y;
+	wlr_scene_node_set_position(&m->optimized_blur->node, m->m.x, m->m.y);
+	wlr_scene_optimized_blur_set_size(m->optimized_blur,
+			MAX(0, m->m.width), MAX(0, m->m.height));
+	wlr_scene_node_set_enabled(&m->optimized_blur->node, !fullscreen);
+	if (!fullscreen && (created || moved || !was_enabled))
+		wlr_scene_optimized_blur_mark_dirty(m->optimized_blur);
+}
+
+void
 arrangelayer(Monitor *m, struct wl_list *list, struct wlr_box *usable_area, int exclusive)
 {
 	LayerSurface *l;
@@ -88,6 +144,8 @@ cleanupmon(struct wl_listener *listener, void *data)
 		pinchmon = NULL;
 	closemon(m);
 	wlr_scene_node_destroy(&m->fullscreen_bg->node);
+	if (m->optimized_blur)
+		wlr_scene_node_destroy(&m->optimized_blur->node);
 	free(m);
 }
 
@@ -127,6 +185,15 @@ commitlayersurfacenotify(struct wl_listener *listener, void *data)
 	struct wlr_layer_surface_v1 *layer_surface = l->layer_surface;
 	struct wlr_scene_tree *scene_layer = layers[layermap[layer_surface->current.layer]];
 	struct wlr_layer_surface_v1_state old_state;
+	uint32_t layer = l->layer_surface->initial_commit
+			? layer_surface->pending.layer : layer_surface->current.layer;
+	int blur_layer = l->scene->node.parent == layers[LyrBg]
+			|| l->scene->node.parent == layers[LyrBottom]
+			|| layer == ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND
+			|| layer == ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM;
+
+	if (blur_layer)
+		monitorblurdirty(l->mon);
 
 	if (l->layer_surface->initial_commit) {
 		client_set_scale(layer_surface->surface, l->mon->wlr_output->scale);
@@ -277,6 +344,7 @@ createmon(struct wl_listener *listener, void *data)
 	 * output (such as DPI, scale factor, manufacturer, etc).
 	 */
 	m->scene_output = wlr_scene_output_create(scene, wlr_output);
+	monitorblurupdate(m);
 	if (m->m.x == -1 && m->m.y == -1)
 		wlr_output_layout_add_auto(output_layout, wlr_output);
 	else
@@ -287,6 +355,10 @@ void
 destroylayersurfacenotify(struct wl_listener *listener, void *data)
 {
 	LayerSurface *l = wl_container_of(listener, l, destroy);
+
+	if (l->layer_surface->current.layer == ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND
+			|| l->layer_surface->current.layer == ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM)
+		monitorblurdirty(l->mon);
 
 	wl_list_remove(&l->link);
 	wl_list_remove(&l->destroy.link);
@@ -491,9 +563,13 @@ void
 unmaplayersurfacenotify(struct wl_listener *listener, void *data)
 {
 	LayerSurface *l = wl_container_of(listener, l, unmap);
+	Monitor *m = l->mon;
 
 	l->mapped = 0;
 	wlr_scene_node_set_enabled(&l->scene->node, 0);
+	if (l->layer_surface->current.layer == ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND
+			|| l->layer_surface->current.layer == ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM)
+		monitorblurdirty(m);
 	if (l == exclusive_focus)
 		exclusive_focus = NULL;
 	if (l->layer_surface->output && (l->mon = l->layer_surface->output->data))
@@ -559,6 +635,7 @@ updatemons(struct wl_listener *listener, void *data)
 
 		wlr_scene_node_set_position(&m->fullscreen_bg->node, m->m.x, m->m.y);
 		wlr_scene_rect_set_size(m->fullscreen_bg, m->m.width, m->m.height);
+		monitorblurupdate(m);
 
 		if (m->lock_surface) {
 			struct wlr_scene_tree *scene_tree = m->lock_surface->surface->data;

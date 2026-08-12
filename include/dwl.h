@@ -15,6 +15,10 @@
 #include <libinput.h>
 #include <linux/input-event-codes.h>
 #include <math.h>
+#include <scenefx/render/fx_renderer/fx_renderer.h>
+#include <scenefx/types/fx/clipped_region.h>
+#include <scenefx/types/fx/corner_location.h>
+#include <scenefx/types/wlr_scene.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -62,7 +66,6 @@
 #include <wlr/types/wlr_primary_selection.h>
 #include <wlr/types/wlr_primary_selection_v1.h>
 #include <wlr/types/wlr_relative_pointer_v1.h>
-#include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_screencopy_v1.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_server_decoration.h>
@@ -105,7 +108,7 @@
 /* enums */
 enum { CurNormal, CurPressed, CurMove, CurResize, CurPan, CurConsumed }; /* cursor */
 enum { XDGShell, LayerShell, X11 }; /* client types */
-enum { LyrBg, LyrBottom, LyrTile, LyrFloat, LyrTop, LyrFS, LyrOverlay, LyrBlock, NUM_LAYERS }; /* scene layers */
+enum { LyrBg, LyrBottom, LyrBlur, LyrTile, LyrFloat, LyrTop, LyrFS, LyrOverlay, LyrBlock, NUM_LAYERS }; /* scene layers */
 
 typedef union {
 	int i;
@@ -128,8 +131,10 @@ typedef struct {
 
 	Monitor *mon;
 	struct wlr_scene_tree *scene;
-	struct wlr_scene_rect *border[4]; /* top, bottom, left, right */
+	struct wlr_scene_rect *border;
 	struct wlr_scene_tree *scene_surface;
+	struct wlr_scene_buffer *effect_buffer;
+	struct wlr_scene_shadow *shadow;
 	struct wlr_scene_rect *collapsed_bg;
 	struct wlr_scene_buffer *collapsed_label;
 	struct wl_list link;
@@ -215,6 +220,7 @@ struct Monitor {
 	struct wlr_output *wlr_output;
 	struct wlr_scene_output *scene_output;
 	struct wlr_scene_rect *fullscreen_bg; /* See createmon() for info */
+	struct wlr_scene_optimized_blur *optimized_blur;
 	struct wl_listener frame;
 	struct wl_listener destroy;
 	struct wl_listener request_state;
@@ -279,6 +285,24 @@ typedef struct {
 	float focuscolor[4];
 	float urgentcolor[4];
 	float fullscreen_bg[4];
+	int corner_radius;
+	int opacity_enabled;
+	float opacity_active;
+	float opacity_inactive;
+	int shadow_enabled;
+	float shadow_sigma;
+	int shadow_offset_x;
+	int shadow_offset_y;
+	float shadow_color[4];
+	int blur_enabled;
+	int blur_optimized;
+	int blur_passes;
+	int blur_radius;
+	float blur_noise;
+	float blur_brightness;
+	float blur_contrast;
+	float blur_saturation;
+	int blur_ignore_transparent;
 	float pan_speed;
 	float zoom_min;
 	float zoom_max;
@@ -336,6 +360,8 @@ static void axisnotify(struct wl_listener *listener, void *data);
 static void buttonpress(struct wl_listener *listener, void *data);
 static double clientcanvasscale(Client *c);
 static void clientcollapsedupdate(Client *c, int redraw);
+static void clienteffectsupdate(Client *c);
+static void clientshadowgeometry(Client *c, double scale);
 static void clientsettle(Client *c);
 static void clientsceneposition(Client *c);
 static void clientsceneupdate(Client *c);
@@ -404,6 +430,8 @@ static void motionabsolute(struct wl_listener *listener, void *data);
 static void motionnotify(uint32_t time, struct wlr_input_device *device, double sx,
 		double sy, double sx_unaccel, double sy_unaccel);
 static void motionrelative(struct wl_listener *listener, void *data);
+static void monitorblurdirty(Monitor *m);
+static void monitorblurupdate(Monitor *m);
 static void moveresize(const Arg *arg);
 static void outputmgrapply(struct wl_listener *listener, void *data);
 static void outputmgrapplyortest(struct wlr_output_configuration_v1 *config, int test);

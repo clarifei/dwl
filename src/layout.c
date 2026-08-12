@@ -10,6 +10,8 @@ typedef struct {
 	int scaled_x, scaled_y;
 	int width, height;
 	int scaled_width, scaled_height;
+	int corner_radius, scaled_corner_radius;
+	struct clipped_region clipped_region, scaled_clipped_region;
 	double scale;
 	wlr_scene_buffer_point_accepts_input_func_t point_accepts_input;
 } CanvasNodeState;
@@ -32,6 +34,21 @@ canvasnodebufferupdate(CanvasNodeState *state, int committed)
 	wlr_scene_buffer_set_dest_size(buffer,
 			state->scaled_width, state->scaled_height);
 	wlr_scene_buffer_set_filter_mode(buffer, WLR_SCALE_FILTER_BILINEAR);
+}
+
+static struct clipped_region
+canvasclippedregionscale(const struct clipped_region *region, double scale)
+{
+	struct clipped_region scaled = *region;
+
+	scaled.area.x = (int)round(region->area.x * scale);
+	scaled.area.y = (int)round(region->area.y * scale);
+	scaled.area.width = canvas_scaled_extent(region->area.x,
+			region->area.width, scale);
+	scaled.area.height = canvas_scaled_extent(region->area.y,
+			region->area.height, scale);
+	scaled.corner_radius = (int)round(region->corner_radius * scale);
+	return scaled;
 }
 
 static void
@@ -123,6 +140,8 @@ canvasnodestate(struct wlr_scene_node *node)
 		struct wlr_scene_rect *rect = wlr_scene_rect_from_node(node);
 		state->width = state->scaled_width = rect->width;
 		state->height = state->scaled_height = rect->height;
+		state->corner_radius = state->scaled_corner_radius = rect->corner_radius;
+		state->clipped_region = state->scaled_clipped_region = rect->clipped_region;
 	} else if (node->type == WLR_SCENE_NODE_BUFFER) {
 		struct wlr_scene_buffer *buffer = wlr_scene_buffer_from_node(node);
 		struct wlr_scene_surface *surface = wlr_scene_surface_try_from_buffer(buffer);
@@ -149,7 +168,13 @@ canvasnodestate(struct wlr_scene_node *node)
 static void
 canvasnodescale(struct wlr_scene_node *node, double scale)
 {
-	CanvasNodeState *state = canvasnodestate(node);
+	CanvasNodeState *state;
+
+	if (node->type == WLR_SCENE_NODE_SHADOW
+			|| node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR)
+		return;
+
+	state = canvasnodestate(node);
 
 	state->scale = scale;
 	canvasnodepositionupdate(node, state);
@@ -166,8 +191,19 @@ canvasnodescale(struct wlr_scene_node *node, double scale)
 				state->width, scale);
 		state->scaled_height = canvas_scaled_extent(state->y,
 				state->height, scale);
+		if (memcmp(&rect->clipped_region, &state->scaled_clipped_region,
+				sizeof(rect->clipped_region)))
+			state->clipped_region = rect->clipped_region;
+		if (rect->corner_radius != state->scaled_corner_radius)
+			state->corner_radius = rect->corner_radius;
+		state->scaled_corner_radius = (int)round(state->corner_radius * scale);
+		state->scaled_clipped_region = canvasclippedregionscale(
+				&state->clipped_region, scale);
 		wlr_scene_rect_set_size(rect,
 				state->scaled_width, state->scaled_height);
+		wlr_scene_rect_set_corner_radius(rect, state->scaled_corner_radius,
+				rect->corners);
+		wlr_scene_rect_set_clipped_region(rect, state->scaled_clipped_region);
 	} else if (node->type == WLR_SCENE_NODE_BUFFER) {
 		canvasnodebufferupdate(state, 0);
 	} else {
@@ -273,8 +309,11 @@ clientsceneupdate(Client *c)
 	if (client_is_unmanaged(c))
 		return;
 	scale = clientcanvasscale(c);
-	wl_list_for_each(node, &c->scene->children, link)
-		canvasnodescale(node, scale);
+	wl_list_for_each(node, &c->scene->children, link) {
+		if (node != &c->border->node)
+			canvasnodescale(node, scale);
+	}
+	clienteffectsupdate(c);
 }
 
 
@@ -395,6 +434,7 @@ arrange(Monitor *m)
 
 	wlr_scene_node_set_enabled(&m->fullscreen_bg->node,
 			(c = focustop(m)) && c->isfullscreen);
+	monitorblurupdate(m);
 
 	strncpy(m->ltsymbol, m->lt[m->sellt]->symbol, LENGTH(m->ltsymbol));
 
