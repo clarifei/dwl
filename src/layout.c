@@ -86,9 +86,12 @@ canvasnodecommit(struct wl_listener *listener, void *data)
 		node = &node->parent->node;
 	}
 	toplevel_from_wlr_surface(buffer_state->surface, &c, NULL);
-	if (c && buffer_state->surface == client_surface(c)
-			&& clientcanvasscale(c) != 1.0)
-		clientsceneupdate(c);
+	if (c && buffer_state->surface == client_surface(c)) {
+		if (clientcanvasscale(c) != 1.0)
+			clientsceneupdate(c);
+		else
+			clientbufferfxupdate(c, buffer_state->buffer, 1.0);
+	}
 }
 
 static void
@@ -103,7 +106,7 @@ canvasnodestatedestroy(struct wlr_addon *addon)
 }
 
 static const struct wlr_addon_interface canvas_node_addon_impl = {
-	.name = "dwl_canvas_node",
+	.name = "inca_canvas_node",
 	.destroy = canvasnodestatedestroy,
 };
 

@@ -1,0 +1,107 @@
+.Dd August 12, 2026
+.Dt INCA 1
+.Os
+.Sh NAME
+.Nm inca
+.Nd pointer-first infinite canvas compositor
+.Sh SYNOPSIS
+.Nm
+.Op Fl d
+.Op Fl v
+.Op Fl c Ar path
+.Op Fl s Ar command
+.Sh DESCRIPTION
+.Nm
+is a Wayland compositor based on wlroots and forked from dwl.
+It places windows on a continuous canvas that can be panned and zoomed instead
+of using a traditional tiling layout.
+.Pp
+Window placement, input, effects, monitor rules, and bindings are configured at
+runtime with Lua.
+Valid file changes are reloaded automatically; an invalid
+change leaves the last valid configuration active.
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl c Ar path
+Load the Lua configuration at
+.Ar path .
+.It Fl d
+Enable debug logging from wlroots.
+.It Fl s Ar command
+Run
+.Ar command
+through
+.Pa /bin/sh
+when the compositor starts.
+The process group receives
+.Dv SIGTERM
+when Inca! exits.
+.It Fl v
+Print the name and version, then exit.
+.El
+.Sh CONFIGURATION
+The first readable configuration is used in this order:
+.Bl -enum -compact
+.It
+The path passed with
+.Fl c .
+.It
+.Ev INCA_CONFIG .
+.It
+.Pa $XDG_CONFIG_HOME/inca/config.lua .
+.It
+The installed
+.Pa share/inca/config.lua .
+.It
+.Pa ./config/config.lua .
+.It
+.Pa $HOME/.config/inca/config.lua .
+.El
+.Pp
+The shipped configuration documents every available setting.
+Default controls
+include:
+.Bl -tag -width "Super-Button3" -compact
+.It Alt-Tab
+Focus and center the next window.
+Add Shift to move backward.
+.It Super-c
+Center the active window.
+.It Super-0
+Reset canvas pan and zoom.
+.It Super-minus , Super-equal
+Zoom out or in.
+.It Super-m
+Collapse or restore the active window in place.
+.It Super-Shift-c
+Close the active window.
+.It Super-f
+Toggle fullscreen.
+.It Super-Button1
+Move a window.
+.It Super-Button2
+Pan the canvas.
+.It Super-Button3
+Resize a window.
+.El
+.Pp
+Dragging empty canvas or scrolling with two fingers pans it.
+Pinch gestures zoom the canvas.
+Nearby window edges snap together, and holding a dragged window at
+an output edge pans the viewport.
+.Sh ENVIRONMENT
+.Bl -tag -width INCA_CONFIG
+.It Ev INCA_CONFIG
+Path to the runtime Lua configuration.
+.It Ev XDG_CONFIG_HOME
+Base directory for the default per-user configuration path.
+.It Ev XDG_RUNTIME_DIR
+Directory used to create the Wayland socket.
+.It Ev WAYLAND_DISPLAY
+Name of the Wayland display created by Inca!.
+.It Ev WLR_*
+Backend and renderer settings understood by wlroots.
+.El
+.Sh AUTHORS
+.An Inca! contributors
+Inca! is based on dwl and retains its original contributors and license.

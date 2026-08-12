@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=Inca!
+Comment=Pointer-first infinite canvas compositor
+Exec=inca
+Type=Application

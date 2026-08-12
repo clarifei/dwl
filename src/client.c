@@ -85,12 +85,36 @@ clientshadowgeometry(Client *c, double scale)
 }
 
 void
+clientbufferfxupdate(Client *c, struct wlr_scene_buffer *buffer, double scale)
+{
+	float opacity;
+	int enabled, focused, radius;
+
+	if (!c || !buffer)
+		return;
+	enabled = !c->isfullscreen;
+	focused = c->mon && focustop(c->mon) == c;
+	radius = enabled ? MIN((int)round(config.corner_radius * scale),
+			MIN(MAX(0, (int)round((c->geom.width - 2 * (int)c->bw) * scale)),
+					MAX(0, (int)round((c->geom.height - 2 * (int)c->bw) * scale))) / 2) : 0;
+	opacity = config.opacity_enabled && enabled
+			? (focused ? config.opacity_active : config.opacity_inactive) : 1.0f;
+	wlr_scene_buffer_set_opacity(buffer, opacity);
+	wlr_scene_buffer_set_corner_radius(buffer, radius,
+			radius ? CORNER_LOCATION_ALL : CORNER_LOCATION_NONE);
+	wlr_scene_buffer_set_backdrop_blur(buffer,
+			enabled && config.blur_enabled);
+	wlr_scene_buffer_set_backdrop_blur_optimized(buffer, false);
+	wlr_scene_buffer_set_backdrop_blur_ignore_transparent(buffer,
+			config.blur_ignore_transparent);
+}
+
+void
 clienteffectsupdate(Client *c)
 {
 	ClientEffectLookup lookup;
 	double scale;
-	float opacity;
-	int enabled, focused, radius;
+	int enabled;
 
 	if (!c || !c->scene || client_is_unmanaged(c))
 		return;
@@ -101,25 +125,8 @@ clienteffectsupdate(Client *c)
 		c->effect_buffer = lookup.buffer;
 	}
 	enabled = !c->isfullscreen;
-	focused = c->mon && focustop(c->mon) == c;
 	scale = clientcanvasscale(c);
-	radius = enabled ? MIN((int)round(config.corner_radius * scale),
-			MIN(MAX(0, (int)round((c->geom.width - 2 * (int)c->bw) * scale)),
-					MAX(0, (int)round((c->geom.height - 2 * (int)c->bw) * scale))) / 2) : 0;
-	opacity = config.opacity_enabled && enabled
-			? (focused ? config.opacity_active : config.opacity_inactive) : 1.0f;
-	if (c->effect_buffer) {
-		wlr_scene_buffer_set_opacity(c->effect_buffer, opacity);
-		wlr_scene_buffer_set_corner_radius(c->effect_buffer,
-				radius, radius
-						? CORNER_LOCATION_ALL : CORNER_LOCATION_NONE);
-		wlr_scene_buffer_set_backdrop_blur(c->effect_buffer,
-				enabled && config.blur_enabled);
-		wlr_scene_buffer_set_backdrop_blur_optimized(c->effect_buffer,
-				false);
-		wlr_scene_buffer_set_backdrop_blur_ignore_transparent(c->effect_buffer,
-				config.blur_ignore_transparent);
-	}
+	clientbufferfxupdate(c, c->effect_buffer, scale);
 	clientbordergeometry(c, scale);
 	if (!config.shadow_enabled && c->shadow) {
 		wlr_scene_node_destroy(&c->shadow->node);
@@ -267,6 +274,8 @@ clientcollapsedupdate(Client *c, int redraw)
 		buffer = collapsedbuffercreate(c, label_width, label_height);
 		c->collapsed_label = wlr_scene_buffer_create(c->scene, buffer);
 		wlr_buffer_drop(buffer);
+		wlr_scene_buffer_set_dest_size(c->collapsed_label,
+				label_width, label_height);
 		c->collapsed_label->node.data = c;
 		c->collapsed_label_width = label_width;
 		c->collapsed_label_height = label_height;
@@ -659,6 +668,7 @@ mapnotify(struct wl_listener *listener, void *data)
 		}, 1);
 		clientsettle(c);
 	}
+	centercanvas(NULL);
 	clienteffectsupdate(c);
 	printstatus();
 
@@ -675,7 +685,7 @@ maximizenotify(struct wl_listener *listener, void *data)
 {
 	/* This event is raised when a client would like to maximize itself,
 	 * typically because the user clicked on the maximize button on
-	 * client-side decorations. dwl doesn't support maximization, but
+	 * client-side decorations. Inca! doesn't support maximization, but
 	 * to conform to xdg-shell protocol we still must send a configure.
 	 * Since xdg-shell protocol v5 we should ignore request of unsupported
 	 * capabilities, just schedule a empty configure when the client uses <5
@@ -825,6 +835,7 @@ unmapnotify(struct wl_listener *listener, void *data)
 {
 	/* Called when the surface is unmapped, and should no longer be shown. */
 	Client *c = wl_container_of(listener, c, unmap);
+	int was_focused = c->mon && focustop(c->mon) == c;
 	if (c == grabc) {
 		cursor_mode = CurNormal;
 		grabc = NULL;
@@ -839,6 +850,10 @@ unmapnotify(struct wl_listener *listener, void *data)
 		wl_list_remove(&c->link);
 		setmon(c, NULL, 0);
 		wl_list_remove(&c->flink);
+	}
+	if (was_focused) {
+		focusclient(focustop(selmon), 1);
+		centercanvas(NULL);
 	}
 
 	wlr_scene_node_destroy(&c->scene->node);

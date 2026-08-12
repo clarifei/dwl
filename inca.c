@@ -1,5 +1,5 @@
 /* See LICENSE file for copyright and license details. */
-#include "dwl.h"
+#include "inca.h"
 
 /* variables */
 static pid_t child_pid = -1;
@@ -138,7 +138,7 @@ main(int argc, char *argv[])
 		else if (c == 'd')
 			debug = 1;
 		else if (c == 'v')
-			die("dwl " VERSION);
+		die("Inca! " VERSION);
 		else
 			goto usage;
 	}

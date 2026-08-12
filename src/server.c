@@ -16,6 +16,7 @@ cleanup(void)
 		waitpid(child_pid, NULL, 0);
 	}
 	wlr_xcursor_manager_destroy(cursor_mgr);
+	wlr_cursor_destroy(cursor);
 
 	destroykeyboardgroup(&kb_group->destroy, NULL);
 
@@ -27,6 +28,8 @@ cleanup(void)
 	/* Destroy after the wayland display (when the monitors are already destroyed)
 	   to avoid destroying them with an invalid scene output. */
 	wlr_scene_node_destroy(&scene->tree.node);
+	wlr_allocator_destroy(alloc);
+	wlr_renderer_destroy(drw);
 	config_free(&config);
 	cairo_debug_reset_static_data();
 	FcFini();
@@ -147,7 +150,7 @@ run(char *startup_cmd)
 	}
 
 	/* Mark stdout as non-blocking to avoid the startup script
-	 * causing dwl to freeze when a user neither closes stdin
+	 * causing Inca! to freeze when a user neither closes stdin
 	 * nor consumes standard input in his startup script */
 
 	if (fd_set_nonblock(STDOUT_FILENO) < 0)
@@ -417,6 +420,6 @@ spawn(const Arg *arg)
 		dup2(STDERR_FILENO, STDOUT_FILENO);
 		setsid();
 		execvp(((char **)arg->v)[0], (char **)arg->v);
-		die("dwl: execvp %s failed:", ((char **)arg->v)[0]);
+	die("inca: execvp %s failed:", ((char **)arg->v)[0]);
 	}
 }

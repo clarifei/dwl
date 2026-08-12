@@ -4,8 +4,8 @@
 #include <lua.h>
 #include <lualib.h>
 
-#ifndef DWL_SYSTEM_CONFIG
-#define DWL_SYSTEM_CONFIG "/usr/local/share/dwl/config.lua"
+#ifndef INCA_SYSTEM_CONFIG
+#define INCA_SYSTEM_CONFIG "/usr/local/share/inca/config.lua"
 #endif
 
 typedef enum {
@@ -1454,7 +1454,7 @@ config_parse_file(const char *path, Config *next)
 	}
 	if (status) {
 		error = lua_tostring(lua, -1);
-		fprintf(stderr, "dwl: config %s: %s\n", path,
+		fprintf(stderr, "inca: config %s: %s\n", path,
 				error ? error : "unknown Lua error");
 		lua_close(lua);
 		config_free(next);
@@ -1468,10 +1468,10 @@ static char *
 config_path_candidate(const char *base)
 {
 	char *path;
-	size_t length = strlen(base) + sizeof("/dwl/config.lua");
+	size_t length = strlen(base) + sizeof("/inca/config.lua");
 
 	path = ecalloc(length, sizeof(*path));
-	snprintf(path, length, "%s/dwl/config.lua", base);
+	snprintf(path, length, "%s/inca/config.lua", base);
 	return path;
 }
 
@@ -1483,7 +1483,7 @@ config_find_path(const char *path)
 
 	if (path)
 		return config_strdup(path);
-	if ((path = getenv("DWL_CONFIG")))
+	if ((path = getenv("INCA_CONFIG")))
 		return config_strdup(path);
 	base = getenv("XDG_CONFIG_HOME");
 	if (base && (candidate = config_path_candidate(base))) {
@@ -1491,8 +1491,8 @@ config_find_path(const char *path)
 			return candidate;
 		free(candidate);
 	}
-	if (!access(DWL_SYSTEM_CONFIG, R_OK))
-		return config_strdup(DWL_SYSTEM_CONFIG);
+	if (!access(INCA_SYSTEM_CONFIG, R_OK))
+		return config_strdup(INCA_SYSTEM_CONFIG);
 	/* The source tree ships a usable example for development and packaging. */
 	if (!access("config/config.lua", R_OK))
 		return config_strdup("config/config.lua");
@@ -1536,7 +1536,7 @@ config_init(const char *path)
 		config = next;
 		config_free(&old);
 	} else if (access(config_file, R_OK)) {
-		fprintf(stderr, "dwl: config %s is not readable, using defaults\n", config_file);
+		fprintf(stderr, "inca: config %s is not readable, using defaults\n", config_file);
 	}
 	return 0;
 }
@@ -1570,13 +1570,13 @@ config_watch_start(void)
 		return;
 	config_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
 	if (config_fd < 0) {
-		fprintf(stderr, "dwl: config watcher: inotify_init1: %s\n", strerror(errno));
+		fprintf(stderr, "inca: config watcher: inotify_init1: %s\n", strerror(errno));
 		return;
 	}
 	config_watch = inotify_add_watch(config_fd, config_dir,
 			IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE | IN_DELETE);
 	if (config_watch < 0) {
-		fprintf(stderr, "dwl: config watcher: %s: %s\n", config_dir, strerror(errno));
+		fprintf(stderr, "inca: config watcher: %s: %s\n", config_dir, strerror(errno));
 		close(config_fd);
 		config_fd = -1;
 		return;
@@ -1584,7 +1584,7 @@ config_watch_start(void)
 	config_source = wl_event_loop_add_fd(event_loop, config_fd, WL_EVENT_READABLE,
 			config_inotify, NULL);
 	if (!config_source) {
-		fprintf(stderr, "dwl: config watcher: failed to attach event source\n");
+		fprintf(stderr, "inca: config watcher: failed to attach event source\n");
 		inotify_rm_watch(config_fd, config_watch);
 		close(config_fd);
 		config_watch = -1;
@@ -1636,7 +1636,7 @@ config_apply_keyboard(void)
 			XKB_KEYMAP_COMPILE_NO_FLAGS))) {
 		if (context)
 			xkb_context_unref(context);
-		fprintf(stderr, "dwl: config: failed to reload keyboard map\n");
+		fprintf(stderr, "inca: config: failed to reload keyboard map\n");
 		return;
 	}
 	wlr_keyboard_set_keymap(&kb_group->wlr_group->keyboard, keymap);
@@ -1718,5 +1718,5 @@ config_reload(void)
 	config = next;
 	config_apply_live(&old);
 	config_free(&old);
-	fprintf(stderr, "dwl: reloaded config %s\n", config_file);
+	fprintf(stderr, "inca: reloaded config %s\n", config_file);
 }

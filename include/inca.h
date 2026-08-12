@@ -2,8 +2,8 @@
  * See LICENSE file for copyright and license details.
  * Internal compositor types and function interface for the unity build.
  */
-#ifndef DWL_H
-#define DWL_H
+#ifndef INCA_H
+#define INCA_H
 
 #include <errno.h>
 #include <cairo.h>
@@ -369,6 +369,8 @@ static const pixman_region32_t *backgroundeffectregion(struct wlr_surface *surfa
 static void backgroundeffectsinit(void);
 static double clientcanvasscale(Client *c);
 static void clientcollapsedupdate(Client *c, int redraw);
+static void clientbufferfxupdate(Client *c, struct wlr_scene_buffer *buffer,
+		double scale);
 static void clienteffectsupdate(Client *c);
 static void clientshadowgeometry(Client *c, double scale);
 static void clientsettle(Client *c);

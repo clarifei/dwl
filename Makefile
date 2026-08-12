@@ -4,25 +4,25 @@
 include config.mk
 
 # flags for compiling
-DWLCPPFLAGS = -I. -Iinclude -Iconfig -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L \
-	-DVERSION=\"$(VERSION)\" -DDWL_SYSTEM_CONFIG=\"$(DATADIR)/dwl/config.lua\" $(XWAYLAND)
-DWLDEVCFLAGS = -g -Wpedantic -Wall -Wextra -Wdeclaration-after-statement \
+INCACPPFLAGS = -I. -Iinclude -Iconfig -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L \
+	-DVERSION=\"$(VERSION)\" -DINCA_SYSTEM_CONFIG=\"$(DATADIR)/inca/config.lua\" $(XWAYLAND)
+INCADEVCFLAGS = -g -Wpedantic -Wall -Wextra -Wdeclaration-after-statement \
 	-Wno-unused-parameter -Wshadow -Wunused-macros -Werror=strict-prototypes \
 	-Werror=implicit -Werror=return-type -Werror=incompatible-pointer-types \
 	-Wfloat-conversion
 
 # CFLAGS / LDFLAGS
 PKGS      = scenefx-0.4 wayland-server xkbcommon libinput lua5.4 cairo fontconfig libdrm pixman-1 $(XLIBS)
-DWLCFLAGS = `$(PKG_CONFIG) --cflags $(PKGS)` $(WLR_INCS) $(DWLCPPFLAGS) $(DWLDEVCFLAGS) $(CFLAGS)
+INCACFLAGS = `$(PKG_CONFIG) --cflags $(PKGS)` $(WLR_INCS) $(INCACPPFLAGS) $(INCADEVCFLAGS) $(CFLAGS)
 LDLIBS    = `$(PKG_CONFIG) --libs $(PKGS)` $(WLR_LIBS) -lm $(LIBS)
-DWL_SRC   = dwl.c include/dwl.h include/canvas.h include/client.h include/util.h src/background-effect.c src/client.c \
+INCA_SRC  = inca.c include/inca.h include/canvas.h include/client.h include/util.h src/background-effect.c src/client.c \
 		src/input.c src/layout.c src/output.c src/server.c src/session.c src/config.c src/xwayland.c
 PROTOCOL_OBJ = ext-background-effect-v1-protocol.o
 
-all: dwl
-dwl: dwl.o util.o $(PROTOCOL_OBJ)
-	$(CC) dwl.o util.o $(PROTOCOL_OBJ) $(DWLCFLAGS) $(LDFLAGS) $(LDLIBS) -o $@
-dwl.o: $(DWL_SRC) config.mk cursor-shape-v1-protocol.h \
+all: inca
+inca: inca.o util.o $(PROTOCOL_OBJ)
+	$(CC) inca.o util.o $(PROTOCOL_OBJ) $(INCACFLAGS) $(LDFLAGS) $(LDLIBS) -o $@
+inca.o: $(INCA_SRC) config.mk cursor-shape-v1-protocol.h \
 		ext-background-effect-v1-protocol.h \
 		pointer-constraints-unstable-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h \
 		wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
@@ -65,35 +65,35 @@ xdg-shell-protocol.h:
 		$(WAYLAND_PROTOCOLS)/stable/xdg-shell/xdg-shell.xml $@
 
 clean:
-	rm -f dwl *.o *-protocol.c *-protocol.h tests/canvas_test
+	rm -f inca *.o *-protocol.c *-protocol.h tests/canvas_test
 
 dist: clean
-	mkdir -p dwl-$(VERSION)
+	mkdir -p inca-$(VERSION)
 	cp -R LICENSE* Makefile CHANGELOG.md README.md config include \
-		config.mk protocols src dwl.1 dwl.c util.c dwl.desktop \
-		dwl-$(VERSION)
-	tar -caf dwl-$(VERSION).tar.gz dwl-$(VERSION)
-	rm -rf dwl-$(VERSION)
+		config.mk protocols src inca.1 inca.c util.c inca.desktop \
+		inca-$(VERSION)
+	tar -caf inca-$(VERSION).tar.gz inca-$(VERSION)
+	rm -rf inca-$(VERSION)
 
-install: dwl
+install: inca
 	mkdir -p $(DESTDIR)$(PREFIX)/bin
-	rm -f $(DESTDIR)$(PREFIX)/bin/dwl
-	cp -f dwl $(DESTDIR)$(PREFIX)/bin
-	chmod 755 $(DESTDIR)$(PREFIX)/bin/dwl
-	mkdir -p $(DESTDIR)$(DATADIR)/dwl
-	cp -f config/config.lua $(DESTDIR)$(DATADIR)/dwl/config.lua
-	chmod 644 $(DESTDIR)$(DATADIR)/dwl/config.lua
+	rm -f $(DESTDIR)$(PREFIX)/bin/inca
+	cp -f inca $(DESTDIR)$(PREFIX)/bin
+	chmod 755 $(DESTDIR)$(PREFIX)/bin/inca
+	mkdir -p $(DESTDIR)$(DATADIR)/inca
+	cp -f config/config.lua $(DESTDIR)$(DATADIR)/inca/config.lua
+	chmod 644 $(DESTDIR)$(DATADIR)/inca/config.lua
 	mkdir -p $(DESTDIR)$(MANDIR)/man1
-	cp -f dwl.1 $(DESTDIR)$(MANDIR)/man1
-	chmod 644 $(DESTDIR)$(MANDIR)/man1/dwl.1
+	cp -f inca.1 $(DESTDIR)$(MANDIR)/man1
+	chmod 644 $(DESTDIR)$(MANDIR)/man1/inca.1
 	mkdir -p $(DESTDIR)$(DATADIR)/wayland-sessions
-	cp -f dwl.desktop $(DESTDIR)$(DATADIR)/wayland-sessions/dwl.desktop
-	chmod 644 $(DESTDIR)$(DATADIR)/wayland-sessions/dwl.desktop
+	cp -f inca.desktop $(DESTDIR)$(DATADIR)/wayland-sessions/inca.desktop
+	chmod 644 $(DESTDIR)$(DATADIR)/wayland-sessions/inca.desktop
 uninstall:
-	rm -f $(DESTDIR)$(PREFIX)/bin/dwl $(DESTDIR)$(MANDIR)/man1/dwl.1 \
-		$(DESTDIR)$(DATADIR)/dwl/config.lua \
-		$(DESTDIR)$(DATADIR)/wayland-sessions/dwl.desktop
+	rm -f $(DESTDIR)$(PREFIX)/bin/inca $(DESTDIR)$(MANDIR)/man1/inca.1 \
+		$(DESTDIR)$(DATADIR)/inca/config.lua \
+		$(DESTDIR)$(DATADIR)/wayland-sessions/inca.desktop
 
 .SUFFIXES: .c .o
 .c.o:
-	$(CC) $(CPPFLAGS) $(DWLCFLAGS) -o $@ -c $<
+	$(CC) $(CPPFLAGS) $(INCACFLAGS) -o $@ -c $<

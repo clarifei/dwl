@@ -1,4 +1,4 @@
--- dwl runtime configuration. Save this file and dwl reloads it automatically.
+-- Inca! runtime configuration. Save this file and Inca! reloads it automatically.
 return {
   appearance = {
     sloppyfocus = true,
