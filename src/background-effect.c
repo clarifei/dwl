@@ -1,5 +1,6 @@
 /* ext-background-effect-v1 state and SceneFX layer-shell integration. */
 
+#include "inca.h"
 #include "ext-background-effect-v1-protocol.h"
 #include <assert.h>
 #include <wlr/util/addon.h>

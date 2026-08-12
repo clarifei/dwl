@@ -1,6 +1,8 @@
 /* See LICENSE file for copyright and license details. */
 /* Session lock, idle inhibition, selection, and drag handling. */
 
+#include "inca.h"
+
 void
 checkidleinhibitor(struct wlr_surface *exclude)
 {

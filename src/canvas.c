@@ -1,5 +1,7 @@
 /* See LICENSE file for copyright and license details. */
-/* Layout algorithms, tag operations, and layout-related commands. */
+/* Canvas transforms, scene scaling, placement, and navigation. */
+
+#include "inca.h"
 
 typedef struct {
 	struct wlr_addon addon;
@@ -226,8 +228,7 @@ canvasnodescale(struct wlr_scene_node *node, double scale)
 double
 clientcanvasscale(Client *c)
 {
-	if (!c || !c->mon || !ISCANVAS(c->mon) || c->isfullscreen
-			|| client_is_unmanaged(c))
+	if (!c || !c->mon || c->isfullscreen)
 		return 1.0;
 	return c->mon->canvas_zoom > 0.0 ? c->mon->canvas_zoom : 1.0;
 }
@@ -238,7 +239,7 @@ canvaspointtoscreen(Monitor *m, double x, double y,
 {
 	double zoom;
 
-	if (!m || !ISCANVAS(m)) {
+	if (!m) {
 		if (screen_x)
 			*screen_x = x;
 		if (screen_y)
@@ -259,7 +260,7 @@ canvaspointtoworld(Monitor *m, double x, double y,
 {
 	double zoom;
 
-	if (!m || !ISCANVAS(m)) {
+	if (!m) {
 		if (world_x)
 			*world_x = x;
 		if (world_y)
@@ -294,8 +295,7 @@ clientsceneposition(Client *c)
 
 	if (!c || !c->scene)
 		return;
-	if (c->mon && ISCANVAS(c->mon) && !c->isfullscreen
-			&& !client_is_unmanaged(c)) {
+	if (c->mon && !c->isfullscreen) {
 		canvaspointtoscreen(c->mon, c->geom.x, c->geom.y, &x, &y);
 	} else {
 		x = c->geom.x;
@@ -314,8 +314,6 @@ clientsceneupdate(Client *c)
 	clientsceneposition(c);
 	if (!c || !c->scene)
 		return;
-	if (client_is_unmanaged(c))
-		return;
 	scale = clientcanvasscale(c);
 	wl_list_for_each(node, &c->scene->children, link) {
 		if (node != &c->border->node)
@@ -332,13 +330,13 @@ clientsnap(Client *c, struct wlr_box *geo)
 	long long best_dx = config.snap_distance + 1;
 	long long best_dy = config.snap_distance + 1;
 
-	if (!c || !geo || !ISCANVAS(c->mon) || config.snap_distance <= 0)
+	if (!c || !geo || !c->mon || config.snap_distance <= 0)
 		return;
 	wl_list_for_each(other, &clients, link) {
 		long long delta;
 
-		if (other == c || other->mon != c->mon || !VISIBLEON(other, c->mon)
-				|| other->isfullscreen || client_is_unmanaged(other))
+		if (other == c || other->mon != c->mon || other->iscollapsed
+				|| other->isfullscreen)
 			continue;
 		if ((long long)geo->y < (long long)other->geom.y + other->geom.height
 				&& (long long)geo->y + geo->height > other->geom.y) {
@@ -379,12 +377,12 @@ clientsettle(Client *c)
 	size_t count = 0, i = 0;
 	int overlap = 0;
 
-	if (!c || !ISCANVAS(c->mon) || client_is_unmanaged(c) || c->isfullscreen)
+	if (!c || !c->mon || c->isfullscreen)
 		return;
 	moving = (CanvasBox){c->geom.x, c->geom.y, c->geom.width, c->geom.height};
 	wl_list_for_each(other, &clients, link)
-		if (other != c && other->mon == c->mon && VISIBLEON(other, c->mon)
-				&& !other->isfullscreen && !client_is_unmanaged(other)) {
+		if (other != c && other->mon == c->mon && !other->iscollapsed
+				&& !other->isfullscreen) {
 			count++;
 			overlap |= canvas_boxes_overlap(moving,
 					(CanvasBox){other->geom.x, other->geom.y,
@@ -395,8 +393,8 @@ clientsettle(Client *c)
 		return;
 	fixed = ecalloc(count, sizeof(*fixed));
 	wl_list_for_each(other, &clients, link) {
-		if (other == c || other->mon != c->mon || !VISIBLEON(other, c->mon)
-				|| other->isfullscreen || client_is_unmanaged(other))
+		if (other == c || other->mon != c->mon || other->iscollapsed
+				|| other->isfullscreen)
 			continue;
 		fixed[i++] = (CanvasBox){other->geom.x, other->geom.y,
 				other->geom.width, other->geom.height};
@@ -435,31 +433,13 @@ arrange(Monitor *m)
 
 	wl_list_for_each(c, &clients, link) {
 		if (c->mon == m) {
-			wlr_scene_node_set_enabled(&c->scene->node, VISIBLEON(c, m));
-			client_set_suspended(c, !VISIBLEON(c, m) || c->iscollapsed);
+			wlr_scene_node_set_enabled(&c->scene->node, 1);
+			client_set_suspended(c, c->iscollapsed);
 		}
 	}
 
 	wlr_scene_node_set_enabled(&m->fullscreen_bg->node,
 			(c = focustop(m)) && c->isfullscreen);
-	strncpy(m->ltsymbol, m->lt[m->sellt]->symbol, LENGTH(m->ltsymbol));
-
-	/* We move all clients (except fullscreen and unmanaged) to LyrTile while
-	 * in floating layout to avoid "real" floating clients be always on top */
-	wl_list_for_each(c, &clients, link) {
-		if (c->mon != m || c->scene->node.parent == layers[LyrFS])
-			continue;
-
-		wlr_scene_node_reparent(&c->scene->node,
-				(!m->lt[m->sellt]->arrange && c->isfloating)
-						? layers[LyrTile]
-						: (m->lt[m->sellt]->arrange && c->isfloating)
-								? layers[LyrFloat]
-								: c->scene->node.parent);
-	}
-
-	if (m->lt[m->sellt]->arrange)
-		m->lt[m->sellt]->arrange(m);
 	updatecanvas(m, 1);
 	motionnotify(0, NULL, 0, 0, 0, 0);
 	checkidleinhibitor(NULL);
@@ -470,7 +450,7 @@ pancanvas(Monitor *m, double dx, double dy)
 {
 	Client *focused;
 
-	if (!ISCANVAS(m) || !m->wlr_output->enabled)
+	if (!m || !m->wlr_output->enabled)
 		return;
 	if ((focused = focustop(m)) && focused->isfullscreen)
 		return;
@@ -480,6 +460,8 @@ pancanvas(Monitor *m, double dx, double dy)
 	m->canvas_zoom_target = m->canvas_zoom;
 	m->canvas_x += dx;
 	m->canvas_y += dy;
+	m->canvas_x_target = m->canvas_x;
+	m->canvas_y_target = m->canvas_y;
 	updatecanvas(m, 0);
 }
 
@@ -488,14 +470,14 @@ homecanvas(const Arg *arg)
 {
 	Client *focused;
 
-	if (!ISCANVAS(selmon) || ((focused = focustop(selmon)) && focused->isfullscreen))
+	if (!selmon || ((focused = focustop(selmon)) && focused->isfullscreen))
 		return;
-	selmon->canvas_x = 0.0;
-	selmon->canvas_y = 0.0;
-	selmon->canvas_zoom = 1.0;
+	selmon->canvas_x_target = 0.0;
+	selmon->canvas_y_target = 0.0;
 	selmon->canvas_zoom_target = 1.0;
-	updatecanvas(selmon, 1);
-	motionnotify(0, NULL, 0, 0, 0, 0);
+	clock_gettime(CLOCK_MONOTONIC, &selmon->canvas_camera_frame);
+	clock_gettime(CLOCK_MONOTONIC, &selmon->canvas_zoom_frame);
+	wlr_output_schedule_frame(selmon->wlr_output);
 }
 
 void
@@ -504,29 +486,29 @@ centercanvas(const Arg *arg)
 	Client *c;
 	double center_x, center_y, client_x, client_y, zoom;
 
-	if (!ISCANVAS(selmon) || !(c = focustop(selmon)) || c->isfullscreen)
+	if (!selmon || !(c = focustop(selmon)) || c->isfullscreen)
 		return;
-	zoom = selmon->canvas_zoom;
+	zoom = selmon->canvas_zoom_target;
 	center_x = selmon->w.x + selmon->w.width / 2.0;
 	center_y = selmon->w.y + selmon->w.height / 2.0;
 	client_x = c->geom.x + c->geom.width / 2.0;
 	client_y = c->geom.y + c->geom.height / 2.0;
-	selmon->canvas_x = center_x - selmon->m.x
+	selmon->canvas_x_target = center_x - selmon->m.x
 			- (client_x - selmon->m.x) * zoom;
-	selmon->canvas_y = center_y - selmon->m.y
+	selmon->canvas_y_target = center_y - selmon->m.y
 			- (client_y - selmon->m.y) * zoom;
-	updatecanvas(selmon, 0);
-	motionnotify(0, NULL, 0, 0, 0, 0);
+	clock_gettime(CLOCK_MONOTONIC, &selmon->canvas_camera_frame);
+	wlr_output_schedule_frame(selmon->wlr_output);
 }
 
 void
 zoomcanvasby(Monitor *m, double factor)
 {
 	Client *focused;
-	double base_zoom, new_zoom;
+	double anchor_x, anchor_y, base_zoom, new_zoom;
 	int was_active;
 
-	if (!ISCANVAS(m) || !isfinite(factor) || factor <= 0.0
+	if (!m || !isfinite(factor) || factor <= 0.0
 			|| ((focused = focustop(m)) && focused->isfullscreen))
 		return;
 	was_active = fabs(m->canvas_zoom_target - m->canvas_zoom)
@@ -538,6 +520,19 @@ zoomcanvasby(Monitor *m, double factor)
 		return;
 	if (!was_active)
 		clock_gettime(CLOCK_MONOTONIC, &m->canvas_zoom_frame);
+	anchor_x = m->w.x + m->w.width / 2.0;
+	anchor_y = m->w.y + m->w.height / 2.0;
+	if (was_active) {
+		m->canvas_x_target = canvas_zoom_pan(anchor_x, m->m.x,
+				m->canvas_x_target, base_zoom, new_zoom);
+		m->canvas_y_target = canvas_zoom_pan(anchor_y, m->m.y,
+				m->canvas_y_target, base_zoom, new_zoom);
+	} else {
+		m->canvas_x_target = canvas_zoom_pan(anchor_x, m->m.x,
+				m->canvas_x, m->canvas_zoom, new_zoom);
+		m->canvas_y_target = canvas_zoom_pan(anchor_y, m->m.y,
+				m->canvas_y, m->canvas_zoom, new_zoom);
+	}
 	m->canvas_zoom_target = new_zoom;
 	wlr_output_schedule_frame(m->wlr_output);
 }
@@ -576,10 +571,42 @@ tickcanvaszoom(Monitor *m, const struct timespec *now)
 			+ (now->tv_nsec - m->canvas_zoom_frame.tv_nsec) / 1000000000.0;
 	dt = MAX(0.0, MIN(dt, 1.0 / 30.0));
 	m->canvas_zoom_frame = *now;
-	new_zoom = canvas_animate_zoom(m->canvas_zoom,
+	new_zoom = canvas_animate_value(m->canvas_zoom,
 			m->canvas_zoom_target, dt);
 	setcanvaszoom(m, new_zoom);
 	return new_zoom != m->canvas_zoom_target;
+}
+
+
+int
+tickcanvascamera(Monitor *m, const struct timespec *now)
+{
+	double dt, x, y;
+
+	if (!m)
+		return 0;
+	if (fabs(m->canvas_x_target - m->canvas_x) < CANVAS_ZOOM_EPSILON
+			&& fabs(m->canvas_y_target - m->canvas_y) < CANVAS_ZOOM_EPSILON) {
+		if (m->canvas_x == m->canvas_x_target
+				&& m->canvas_y == m->canvas_y_target)
+			return 0;
+		m->canvas_x = m->canvas_x_target;
+		m->canvas_y = m->canvas_y_target;
+		updatecanvas(m, 0);
+		motionnotify(0, NULL, 0, 0, 0, 0);
+		return 0;
+	}
+	dt = now->tv_sec - m->canvas_camera_frame.tv_sec
+			+ (now->tv_nsec - m->canvas_camera_frame.tv_nsec) / 1000000000.0;
+	dt = MAX(0.0, MIN(dt, 1.0 / 30.0));
+	m->canvas_camera_frame = *now;
+	x = canvas_animate_value(m->canvas_x, m->canvas_x_target, dt);
+	y = canvas_animate_value(m->canvas_y, m->canvas_y_target, dt);
+	m->canvas_x = x;
+	m->canvas_y = y;
+	updatecanvas(m, 0);
+	motionnotify(0, NULL, 0, 0, 0, 0);
+	return x != m->canvas_x_target || y != m->canvas_y_target;
 }
 
 
@@ -590,8 +617,7 @@ tickcanvasedgepan(Monitor *m, const struct timespec *now)
 	struct wlr_box geo;
 
 	if (!m || cursor_mode != CurMove || !grabc || grabc->mon != m
-			|| xytomon(cursor->x, cursor->y) != m
-			|| !ISCANVAS(m))
+			|| xytomon(cursor->x, cursor->y) != m)
 		return 0;
 	vx = canvas_edge_pan_velocity(cursor->x, m->w.x, m->w.width,
 			config.edge_pan_zone, config.edge_pan_min_speed,
@@ -619,6 +645,8 @@ tickcanvasedgepan(Monitor *m, const struct timespec *now)
 	m->canvas_zoom_target = m->canvas_zoom;
 	m->canvas_x -= vx * dt;
 	m->canvas_y -= vy * dt;
+	m->canvas_x_target = m->canvas_x;
+	m->canvas_y_target = m->canvas_y;
 	updatecanvas(m, 0);
 	canvaspointtoworld(m, cursor->x, cursor->y, &world_x, &world_y);
 	geo = (struct wlr_box){
@@ -635,7 +663,7 @@ tickcanvasedgepan(Monitor *m, const struct timespec *now)
 void
 zoomcanvas(const Arg *arg)
 {
-	if (!arg || !ISCANVAS(selmon))
+	if (!arg || !selmon)
 		return;
 	zoomcanvasby(selmon, pow(config.zoom_step, arg->f));
 }
@@ -655,147 +683,36 @@ focusmon(const Arg *arg)
 void
 focusstack(const Arg *arg)
 {
-	/* Focus the next or previous client (in tiling order) on selmon */
-	Client *c, *sel = focustop(selmon);
+	/* Focus the next or previous client in focus-recency order. */
+	Client *c, *sel, *next = NULL;
+	struct wl_list *link;
+
+	if (!arg || !selmon || !arg->i)
+		return;
+	sel = focustop(selmon);
 	if (!sel || (sel->isfullscreen && !client_has_children(sel)))
 		return;
-	if (arg->i > 0) {
-		wl_list_for_each(c, &sel->link, link) {
-			if (&c->link == &clients)
-				continue; /* wrap past the sentinel node */
-			if (VISIBLEON(c, selmon))
-				break; /* found it */
-		}
-	} else {
-		wl_list_for_each_reverse(c, &sel->link, link) {
-			if (&c->link == &clients)
-				continue; /* wrap past the sentinel node */
-			if (VISIBLEON(c, selmon))
-				break; /* found it */
+	link = &sel->flink;
+	while ((link = canvas_cycle_link(&fstack, link, arg->i > 0))
+			!= &sel->flink) {
+		c = wl_container_of(link, c, flink);
+		if (CLIENTON(c, selmon) && !c->iscollapsed) {
+			next = c;
+			break;
 		}
 	}
-	/* If only one client is visible on selmon, then c == sel */
-	focusclient(c, 1);
-	centercanvas(NULL);
-}
-
-void
-incnmaster(const Arg *arg)
-{
-	if (!arg || !selmon)
-		return;
-	selmon->nmaster = MAX(selmon->nmaster + arg->i, 0);
-	arrange(selmon);
-}
-
-void
-monocle(Monitor *m)
-{
-	Client *c;
-	int n = 0;
-
-	wl_list_for_each(c, &clients, link) {
-		if (!VISIBLEON(c, m) || c->isfloating || c->isfullscreen)
-			continue;
-		resize(c, m->w, 0);
-		n++;
+	if (next) {
+		focusclient(next, 1);
+		centercanvas(NULL);
 	}
-	if (n)
-		snprintf(m->ltsymbol, LENGTH(m->ltsymbol), "[%d]", n);
-	if ((c = focustop(m)))
-		wlr_scene_node_raise_to_top(&c->scene->node);
 }
 
 void
-setlayout(const Arg *arg)
-{
-	if (!selmon)
-		return;
-	if (!arg || !arg->v || arg->v != selmon->lt[selmon->sellt])
-		selmon->sellt ^= 1;
-	if (arg && arg->v)
-		selmon->lt[selmon->sellt] = (Layout *)arg->v;
-	strncpy(selmon->ltsymbol, selmon->lt[selmon->sellt]->symbol, LENGTH(selmon->ltsymbol));
-	arrange(selmon);
-	printstatus();
-}
-
-void
-setmfact(const Arg *arg)
-{
-	float f;
-
-	if (!arg || !selmon || !selmon->lt[selmon->sellt]->arrange)
-		return;
-	f = arg->f < 1.0f ? arg->f + selmon->mfact : arg->f - 1.0f;
-	if (f < 0.1 || f > 0.9)
-		return;
-	selmon->mfact = f;
-	arrange(selmon);
-}
-
-void
-tag(const Arg *arg)
-{
-	Client *sel = focustop(selmon);
-	if (!sel || (arg->ui & TAGMASK) == 0)
-		return;
-
-	sel->tags = arg->ui & TAGMASK;
-	focusclient(focustop(selmon), 1);
-	arrange(selmon);
-	printstatus();
-}
-
-void
-tagmon(const Arg *arg)
+sendtomonitor(const Arg *arg)
 {
 	Client *sel = focustop(selmon);
 	if (sel)
-		setmon(sel, dirtomon(arg->i), 0);
-}
-
-void
-tile(Monitor *m)
-{
-	unsigned int mw, my, ty;
-	int i, n = 0;
-	Client *c;
-
-	wl_list_for_each(c, &clients, link)
-		if (VISIBLEON(c, m) && !c->isfloating && !c->isfullscreen)
-			n++;
-	if (n == 0)
-		return;
-
-	if (n > m->nmaster)
-		mw = m->nmaster ? (int)roundf(m->w.width * m->mfact) : 0;
-	else
-		mw = m->w.width;
-	i = my = ty = 0;
-	wl_list_for_each(c, &clients, link) {
-		if (!VISIBLEON(c, m) || c->isfloating || c->isfullscreen)
-			continue;
-		if (i < m->nmaster) {
-			resize(c, (struct wlr_box){.x = m->w.x, .y = m->w.y + my, .width = mw,
-				.height = (m->w.height - my) / (MIN(n, m->nmaster) - i)}, 0);
-			my += c->geom.height;
-		} else {
-			resize(c, (struct wlr_box){.x = m->w.x + mw, .y = m->w.y + ty,
-				.width = m->w.width - mw, .height = (m->w.height - ty) / (n - i)}, 0);
-			ty += c->geom.height;
-		}
-		i++;
-	}
-}
-
-void
-togglefloating(const Arg *arg)
-{
-	Client *sel = focustop(selmon);
-	/* return if fullscreen */
-	if (sel && !sel->isfullscreen)
-		setfloating(sel, !sel->isfloating);
+		setclientmonitor(sel, dirtomon(arg->i));
 }
 
 void
@@ -804,77 +721,4 @@ togglefullscreen(const Arg *arg)
 	Client *sel = focustop(selmon);
 	if (sel)
 		setfullscreen(sel, !sel->isfullscreen);
-}
-
-void
-toggletag(const Arg *arg)
-{
-	uint32_t newtags;
-	Client *sel = focustop(selmon);
-	if (!sel || !(newtags = sel->tags ^ (arg->ui & TAGMASK)))
-		return;
-
-	sel->tags = newtags;
-	focusclient(focustop(selmon), 1);
-	arrange(selmon);
-	printstatus();
-}
-
-void
-toggleview(const Arg *arg)
-{
-	uint32_t newtagset;
-	if (!(newtagset = selmon ? selmon->tagset[selmon->seltags] ^ (arg->ui & TAGMASK) : 0))
-		return;
-
-	selmon->tagset[selmon->seltags] = newtagset;
-	focusclient(focustop(selmon), 1);
-	arrange(selmon);
-	printstatus();
-}
-
-void
-view(const Arg *arg)
-{
-	if (!selmon || (arg->ui & TAGMASK) == selmon->tagset[selmon->seltags])
-		return;
-	selmon->seltags ^= 1; /* toggle sel tagset */
-	if (arg->ui & TAGMASK)
-		selmon->tagset[selmon->seltags] = arg->ui & TAGMASK;
-	focusclient(focustop(selmon), 1);
-	arrange(selmon);
-	printstatus();
-}
-
-void
-zoom(const Arg *arg)
-{
-	Client *c, *sel = focustop(selmon);
-
-	if (!sel || !selmon || !selmon->lt[selmon->sellt]->arrange || sel->isfloating)
-		return;
-
-	/* Search for the first tiled window that is not sel, marking sel as
-	 * NULL if we pass it along the way */
-	wl_list_for_each(c, &clients, link) {
-		if (VISIBLEON(c, selmon) && !c->isfloating) {
-			if (c != sel)
-				break;
-			sel = NULL;
-		}
-	}
-
-	/* Return if no other tiled window was found */
-	if (&c->link == &clients)
-		return;
-
-	/* If we passed sel, move c to the front; otherwise, move sel to the
-	 * front */
-	if (!sel)
-		sel = c;
-	wl_list_remove(&sel->link);
-	wl_list_insert(&clients, &sel->link);
-
-	focusclient(sel, 1);
-	arrange(selmon);
 }

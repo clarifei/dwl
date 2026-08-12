@@ -1,4 +1,7 @@
 inca
+build/
+build-*/
+result
 tests/canvas_test
 *.o
 *-protocol.c

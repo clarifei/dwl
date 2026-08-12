@@ -5,10 +5,11 @@
 #include <math.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <wayland-util.h>
 
 #define CANVAS_NATIVE_ZOOM 1.0
 #define CANVAS_ZOOM_EPSILON 0.001
-#define CANVAS_ZOOM_RESPONSE 0.18
+#define CANVAS_ANIMATION_RESPONSE 0.18
 
 typedef struct {
 	int x, y;
@@ -20,6 +21,15 @@ canvas_clamp_coordinate(long long coordinate)
 {
 	return coordinate < INT_MIN ? INT_MIN
 			: coordinate > INT_MAX ? INT_MAX : (int)coordinate;
+}
+
+
+static inline struct wl_list *
+canvas_cycle_link(struct wl_list *head, struct wl_list *link, int forward)
+{
+	struct wl_list *next = forward ? link->next : link->prev;
+
+	return next == head ? (forward ? head->next : head->prev) : next;
 }
 
 static inline double
@@ -66,9 +76,9 @@ canvas_clamp_zoom(double min, double max, double zoom)
 }
 
 static inline double
-canvas_animate_zoom(double current, double target, double dt)
+canvas_animate_value(double current, double target, double dt)
 {
-	double factor = 1.0 - pow(1.0 - CANVAS_ZOOM_RESPONSE,
+	double factor = 1.0 - pow(1.0 - CANVAS_ANIMATION_RESPONSE,
 			fmax(0.0, dt) * 60.0);
 	double next = current + (target - current) * factor;
 
@@ -111,6 +121,23 @@ canvas_boxes_overlap(CanvasBox a, CanvasBox b, int gap)
 			&& (long long)a.x + a.width + gap > b.x
 			&& (long long)a.y < (long long)b.y + b.height + gap
 			&& (long long)a.y + a.height + gap > b.y;
+}
+
+static inline CanvasBox
+canvas_spawn_box(CanvasBox box, size_t ordinal, int step)
+{
+	static const int offsets[][2] = {
+		{0, 0}, {1, 1}, {-1, 1}, {1, -1}, {-1, -1},
+		{2, 0}, {0, 2}, {-2, 0}, {0, -2},
+	};
+	const size_t count = sizeof(offsets) / sizeof(offsets[0]);
+	const int *offset = offsets[ordinal % count];
+	long long distance = (long long)(step > 0 ? step : 1)
+			* (long long)(ordinal / count + 1);
+
+	box.x = canvas_clamp_coordinate((long long)box.x + offset[0] * distance);
+	box.y = canvas_clamp_coordinate((long long)box.y + offset[1] * distance);
+	return box;
 }
 
 

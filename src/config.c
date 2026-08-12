@@ -1,5 +1,6 @@
 /* Lua configuration, validation, and inotify-backed hot reload. */
 
+#include "inca.h"
 #include <lauxlib.h>
 #include <lua.h>
 #include <lualib.h>
@@ -13,7 +14,6 @@ typedef enum {
 	ConfigArgInt,
 	ConfigArgUInt,
 	ConfigArgFloat,
-	ConfigArgLayout,
 	ConfigArgCommand,
 	ConfigArgDirection,
 	ConfigArgMove,
@@ -29,6 +29,9 @@ static struct wl_event_source *config_source;
 static char *config_file;
 static char *config_dir;
 static char *config_name;
+
+static void config_apply_live(void);
+static void config_reload(void);
 
 static char *
 config_strdup(const char *value)
@@ -50,60 +53,27 @@ config_realloc(void *ptr, size_t size)
 	return result;
 }
 
-static Layout *
-config_find_layout(const Config *cfg, const char *name)
-{
-	size_t i;
-
-	if (!name)
-		return NULL;
-	for (i = 0; i < cfg->layout_count; i++)
-		if (!strcmp(cfg->layouts[i].name, name))
-			return &cfg->layouts[i];
-	return NULL;
-}
-
 static void
-config_append_layout(Config *cfg, const char *name, const char *symbol,
-		void (*arrange_fn)(Monitor *))
-{
-	cfg->layouts = config_realloc(cfg->layouts,
-			(cfg->layout_count + 1) * sizeof(*cfg->layouts));
-	cfg->layouts[cfg->layout_count++] = (Layout){
-		.name = config_strdup(name),
-		.symbol = config_strdup(symbol),
-		.arrange = arrange_fn,
-	};
-}
-
-static void
-config_append_rule(Config *cfg, const char *id, const char *title,
-		uint32_t tags, int floating, int monitor)
+config_append_rule(Config *cfg, const char *app_id, const char *title, int monitor)
 {
 	cfg->rules = config_realloc(cfg->rules,
 			(cfg->rule_count + 1) * sizeof(*cfg->rules));
 	cfg->rules[cfg->rule_count++] = (Rule){
-		.id = id ? config_strdup(id) : NULL,
+		.app_id = app_id ? config_strdup(app_id) : NULL,
 		.title = title ? config_strdup(title) : NULL,
-		.tags = tags,
-		.isfloating = floating,
 		.monitor = monitor,
 	};
 }
 
 static void
-config_append_monrule(Config *cfg, const char *name, float mfact, int nmaster,
-		float scale, Layout *layout, enum wl_output_transform transform,
-		int x, int y)
+config_append_monrule(Config *cfg, const char *name, float scale,
+		enum wl_output_transform transform, int x, int y)
 {
 	cfg->monrules = config_realloc(cfg->monrules,
 			(cfg->monrule_count + 1) * sizeof(*cfg->monrules));
 	cfg->monrules[cfg->monrule_count++] = (MonitorRule){
 		.name = name ? config_strdup(name) : NULL,
-		.mfact = mfact,
-		.nmaster = nmaster,
 		.scale = scale,
-		.lt = layout,
 		.rr = transform,
 		.x = x,
 		.y = y,
@@ -171,18 +141,14 @@ config_free_argv(char **argv)
 	free(argv);
 }
 
-static void
+void
 config_free(Config *cfg)
 {
 	size_t i;
 
 	for (i = 0; i < cfg->rule_count; i++) {
-		free((char *)cfg->rules[i].id);
+		free((char *)cfg->rules[i].app_id);
 		free((char *)cfg->rules[i].title);
-	}
-	for (i = 0; i < cfg->layout_count; i++) {
-		free(cfg->layouts[i].name);
-		free((char *)cfg->layouts[i].symbol);
 	}
 	for (i = 0; i < cfg->monrule_count; i++)
 		free((char *)cfg->monrules[i].name);
@@ -193,7 +159,6 @@ config_free(Config *cfg)
 		if (cfg->buttons[i].func == spawn)
 			config_free_argv((char **)cfg->buttons[i].arg.v);
 	free(cfg->rules);
-	free(cfg->layouts);
 	free(cfg->monrules);
 	free(cfg->keys);
 	free(cfg->buttons);
@@ -217,25 +182,13 @@ config_action(const char *name, ConfigArg *argtype)
 		*argtype = ConfigArgInt;
 		return focusstack;
 	}
-	if (!strcmp(name, "incnmaster")) {
-		*argtype = ConfigArgInt;
-		return incnmaster;
-	}
-	if (!strcmp(name, "setmfact")) {
-		*argtype = ConfigArgFloat;
-		return setmfact;
-	}
-	if (!strcmp(name, "setlayout")) {
-		*argtype = ConfigArgLayout;
-		return setlayout;
-	}
 	if (!strcmp(name, "focusmon")) {
 		*argtype = ConfigArgDirection;
 		return focusmon;
 	}
-	if (!strcmp(name, "tagmon")) {
+	if (!strcmp(name, "sendtomonitor")) {
 		*argtype = ConfigArgDirection;
-		return tagmon;
+		return sendtomonitor;
 	}
 	if (!strcmp(name, "chvt")) {
 		*argtype = ConfigArgUInt;
@@ -255,30 +208,10 @@ config_action(const char *name, ConfigArg *argtype)
 		*argtype = ConfigArgFloat;
 		return zoomcanvas;
 	}
-	if (!strcmp(name, "view")) {
-		*argtype = ConfigArgUInt;
-		return view;
-	}
-	if (!strcmp(name, "toggleview")) {
-		*argtype = ConfigArgUInt;
-		return toggleview;
-	}
-	if (!strcmp(name, "tag")) {
-		*argtype = ConfigArgUInt;
-		return tag;
-	}
-	if (!strcmp(name, "toggletag")) {
-		*argtype = ConfigArgUInt;
-		return toggletag;
-	}
 	if (!strcmp(name, "quit"))
 		return quit;
 	if (!strcmp(name, "killclient"))
 		return killclient;
-	if (!strcmp(name, "zoom"))
-		return zoom;
-	if (!strcmp(name, "togglefloating"))
-		return togglefloating;
 	if (!strcmp(name, "togglefullscreen"))
 		return togglefullscreen;
 	if (!strcmp(name, "togglecollapse"))
@@ -324,6 +257,8 @@ config_mods(lua_State *lua, int index)
 			lua_rawgeti(lua, -1, (lua_Integer)i);
 			name = luaL_checkstring(lua, -1);
 			mods |= config_modifier(name);
+			if (!config_modifier(name))
+				luaL_error(lua, "unknown modifier '%s'", name);
 			lua_pop(lua, 1);
 		}
 	} else {
@@ -353,10 +288,10 @@ config_direction(lua_State *lua, int index)
 {
 	const char *direction;
 
-	lua_getfield(lua, index, "value");
+	lua_getfield(lua, index, "direction");
 	if (lua_isnil(lua, -1)) {
 		lua_pop(lua, 1);
-		lua_getfield(lua, index, "direction");
+		lua_getfield(lua, index, "value");
 	}
 	direction = luaL_checkstring(lua, -1);
 	lua_pop(lua, 1);
@@ -381,8 +316,7 @@ config_lua_command(lua_State *lua, int index)
 
 	lua_getfield(lua, index, "command");
 	if (lua_isstring(lua, -1)) {
-		value = lua_tostring(lua, -1);
-		argv = config_command(value);
+		argv = config_command(lua_tostring(lua, -1));
 		lua_pop(lua, 1);
 		return argv;
 	}
@@ -403,11 +337,10 @@ config_lua_command(lua_State *lua, int index)
 }
 
 static void
-config_binding_arg(lua_State *lua, Config *cfg, int index, ConfigArg argtype, Arg *arg)
+config_binding_arg(lua_State *lua, int index, ConfigArg argtype, Arg *arg)
 {
-	const char *value;
-	Layout *layout;
 	lua_Integer integer;
+	const char *value;
 
 	*arg = (Arg){0};
 	switch (argtype) {
@@ -415,19 +348,6 @@ config_binding_arg(lua_State *lua, Config *cfg, int index, ConfigArg argtype, Ar
 		return;
 	case ConfigArgCommand:
 		arg->v = config_lua_command(lua, index);
-		return;
-	case ConfigArgLayout:
-		lua_getfield(lua, index, "layout");
-		if (lua_isnil(lua, -1)) {
-			lua_pop(lua, 1);
-			return;
-		}
-		value = luaL_checkstring(lua, -1);
-		layout = config_find_layout(cfg, value);
-		lua_pop(lua, 1);
-		if (!layout)
-			luaL_error(lua, "unknown layout '%s'", value);
-		arg->v = layout;
 		return;
 	case ConfigArgDirection:
 		arg->i = config_direction(lua, index);
@@ -453,7 +373,7 @@ config_binding_arg(lua_State *lua, Config *cfg, int index, ConfigArg argtype, Ar
 		return;
 	case ConfigArgUInt:
 		lua_getfield(lua, index, "value");
-		integer = luaL_optinteger(lua, -1, 0);
+		integer = luaL_checkinteger(lua, -1);
 		lua_pop(lua, 1);
 		if (integer < 0 || (lua_Unsigned)integer > UINT_MAX)
 			luaL_error(lua, "binding unsigned integer is out of range");
@@ -463,22 +383,24 @@ config_binding_arg(lua_State *lua, Config *cfg, int index, ConfigArg argtype, Ar
 		lua_getfield(lua, index, "value");
 		arg->f = (float)luaL_checknumber(lua, -1);
 		lua_pop(lua, 1);
+		if (!isfinite(arg->f))
+			luaL_error(lua, "binding value must be finite");
 		return;
 	}
 }
 
 static void
-config_parse_key(lua_State *lua, Config *cfg, int index, int button)
+config_parse_binding(lua_State *lua, Config *cfg, int index, int button)
 {
 	const char *action_name;
 	ConfigAction action;
 	ConfigArg argtype;
 	Arg arg;
-	unsigned int button_code = 0;
-	xkb_keysym_t keysym;
 	uint32_t mods;
-	int on_release;
+	xkb_keysym_t keysym;
+	unsigned int button_code = 0;
 	lua_Integer integer;
+	int on_release;
 
 	luaL_checktype(lua, index, LUA_TTABLE);
 	mods = config_mods(lua, index);
@@ -488,28 +410,8 @@ config_parse_key(lua_State *lua, Config *cfg, int index, int button)
 	lua_pop(lua, 1);
 	if (!action)
 		luaL_error(lua, "unknown action '%s'", action_name);
-	config_binding_arg(lua, cfg, index, argtype, &arg);
-	if (button) {
-		lua_getfield(lua, index, "button");
-		if (lua_isstring(lua, -1)) {
-			const char *name = lua_tostring(lua, -1);
-			if (!strcasecmp(name, "left"))
-				button_code = BTN_LEFT;
-			else if (!strcasecmp(name, "middle"))
-				button_code = BTN_MIDDLE;
-			else if (!strcasecmp(name, "right"))
-				button_code = BTN_RIGHT;
-			else
-				luaL_error(lua, "unknown mouse button '%s'", name);
-		} else {
-			integer = luaL_checkinteger(lua, -1);
-			if (integer < 0 || (lua_Unsigned)integer > UINT_MAX)
-				luaL_error(lua, "mouse button is out of range");
-			button_code = (unsigned int)integer;
-		}
-		lua_pop(lua, 1);
-		config_append_button(cfg, mods, button_code, action, arg);
-	} else {
+	config_binding_arg(lua, index, argtype, &arg);
+	if (!button) {
 		lua_getfield(lua, index, "on_release");
 		if (!lua_isnil(lua, -1) && !lua_isboolean(lua, -1))
 			luaL_error(lua, "on_release must be boolean");
@@ -517,29 +419,52 @@ config_parse_key(lua_State *lua, Config *cfg, int index, int button)
 		lua_pop(lua, 1);
 		keysym = config_keysym(lua, index);
 		config_append_key(cfg, mods, keysym, on_release, action, arg);
+		return;
 	}
+
+	lua_getfield(lua, index, "button");
+	if (lua_isstring(lua, -1)) {
+		const char *name = lua_tostring(lua, -1);
+
+		if (!strcasecmp(name, "left"))
+			button_code = BTN_LEFT;
+		else if (!strcasecmp(name, "middle"))
+			button_code = BTN_MIDDLE;
+		else if (!strcasecmp(name, "right"))
+			button_code = BTN_RIGHT;
+		else
+			luaL_error(lua, "unknown mouse button '%s'", name);
+	} else {
+		integer = luaL_checkinteger(lua, -1);
+		if (integer < 0 || (lua_Unsigned)integer > UINT_MAX)
+			luaL_error(lua, "mouse button is out of range");
+		button_code = (unsigned int)integer;
+	}
+	lua_pop(lua, 1);
+	config_append_button(cfg, mods, button_code, action, arg);
 }
 
 static void
 config_parse_color(lua_State *lua, int index, float color[4], const char *name)
 {
-	const char *value;
 	char *end;
-	unsigned long rgba = 0;
-	size_t i;
+	const char *value;
+	size_t i, length;
+	unsigned long rgba;
 
 	if (lua_isstring(lua, index)) {
 		value = lua_tostring(lua, index);
 		if (value[0] == '#')
 			value++;
-		if (strlen(value) == 6)
-			rgba = strtoul(value, &end, 16) << 8 | 0xff;
-		else if (strlen(value) == 8)
-			rgba = strtoul(value, &end, 16);
-		else
+		length = strlen(value);
+		if (length != 6 && length != 8)
 			luaL_error(lua, "%s must be #RRGGBB or #RRGGBBAA", name);
-		if (*value == '\0' || *end != '\0' || rgba > 0xffffffffUL)
+		errno = 0;
+		rgba = strtoul(value, &end, 16);
+		if (errno || *value == '\0' || *end != '\0')
 			luaL_error(lua, "invalid %s color", name);
+		if (length == 6)
+			rgba = (rgba << 8) | 0xff;
 		for (i = 0; i < 4; i++)
 			color[i] = (float)((rgba >> (24 - i * 8)) & 0xff) / 255.0f;
 		return;
@@ -552,8 +477,8 @@ config_parse_color(lua_State *lua, int index, float color[4], const char *name)
 		lua_rawgeti(lua, index, (lua_Integer)i);
 		color[i - 1] = (float)luaL_checknumber(lua, -1);
 		lua_pop(lua, 1);
-		if (!isfinite(color[i - 1])
-				|| color[i - 1] < 0.0f || color[i - 1] > 1.0f)
+		if (!isfinite(color[i - 1]) || color[i - 1] < 0.0f
+				|| color[i - 1] > 1.0f)
 			luaL_error(lua, "%s color channels must be between 0 and 1", name);
 	}
 }
@@ -571,6 +496,7 @@ static int
 config_bool_field(lua_State *lua, int index, const char *name, int current)
 {
 	int value;
+
 	lua_getfield(lua, index, name);
 	if (lua_isnil(lua, -1)) {
 		lua_pop(lua, 1);
@@ -587,6 +513,7 @@ static int
 config_int_field(lua_State *lua, int index, const char *name, int current)
 {
 	lua_Integer value;
+
 	lua_getfield(lua, index, name);
 	if (lua_isnil(lua, -1)) {
 		lua_pop(lua, 1);
@@ -603,6 +530,7 @@ static float
 config_float_field(lua_State *lua, int index, const char *name, float current)
 {
 	float value;
+
 	lua_getfield(lua, index, name);
 	if (lua_isnil(lua, -1)) {
 		lua_pop(lua, 1);
@@ -610,6 +538,8 @@ config_float_field(lua_State *lua, int index, const char *name, float current)
 	}
 	value = (float)luaL_checknumber(lua, -1);
 	lua_pop(lua, 1);
+	if (!isfinite(value))
+		luaL_error(lua, "%s must be finite", name);
 	return value;
 }
 
@@ -617,6 +547,7 @@ static void
 config_string_field(lua_State *lua, int index, const char *name, const char **dst)
 {
 	const char *value;
+
 	lua_getfield(lua, index, name);
 	if (!lua_isnil(lua, -1)) {
 		value = luaL_checkstring(lua, -1);
@@ -630,10 +561,12 @@ static enum wl_output_transform
 config_transform(lua_State *lua, int index)
 {
 	const char *value;
+	lua_Integer transform;
 
 	if (lua_isnumber(lua, index)) {
-		lua_Integer transform = luaL_checkinteger(lua, index);
-		if (transform < WL_OUTPUT_TRANSFORM_NORMAL || transform > WL_OUTPUT_TRANSFORM_FLIPPED_270)
+		transform = luaL_checkinteger(lua, index);
+		if (transform < WL_OUTPUT_TRANSFORM_NORMAL
+				|| transform > WL_OUTPUT_TRANSFORM_FLIPPED_270)
 			luaL_error(lua, "monitor transform is out of range");
 		return (enum wl_output_transform)transform;
 	}
@@ -670,7 +603,8 @@ config_parse_appearance(lua_State *lua, Config *cfg)
 	cfg->sloppyfocus = config_bool_field(lua, -1, "sloppyfocus", cfg->sloppyfocus);
 	cfg->bypass_surface_visibility = config_bool_field(lua, -1,
 			"bypass_surface_visibility", cfg->bypass_surface_visibility);
-	cfg->borderpx = (unsigned int)config_int_field(lua, -1, "borderpx", (int)cfg->borderpx);
+	cfg->borderpx = (unsigned int)config_int_field(lua, -1, "borderpx",
+			(int)cfg->borderpx);
 	if (cfg->borderpx > 64)
 		luaL_error(lua, "borderpx must be between 0 and 64");
 	config_color_field(lua, -1, "rootcolor", cfg->rootcolor);
@@ -681,7 +615,6 @@ config_parse_appearance(lua_State *lua, Config *cfg)
 	lua_pop(lua, 1);
 }
 
-
 static void
 config_parse_effects(lua_State *lua, Config *cfg)
 {
@@ -691,22 +624,21 @@ config_parse_effects(lua_State *lua, Config *cfg)
 		return;
 	}
 	luaL_checktype(lua, -1, LUA_TTABLE);
-	cfg->corner_radius = config_int_field(lua, -1,
-			"corner_radius", cfg->corner_radius);
+	cfg->corner_radius = config_int_field(lua, -1, "corner_radius",
+			cfg->corner_radius);
 	if (cfg->corner_radius < 0 || cfg->corner_radius > 128)
 		luaL_error(lua, "effects.corner_radius must be between 0 and 128");
 
 	lua_getfield(lua, -1, "opacity");
 	if (!lua_isnil(lua, -1)) {
 		luaL_checktype(lua, -1, LUA_TTABLE);
-		cfg->opacity_enabled = config_bool_field(lua, -1,
-				"enabled", cfg->opacity_enabled);
-		cfg->opacity_active = config_float_field(lua, -1,
-				"active", cfg->opacity_active);
-		cfg->opacity_inactive = config_float_field(lua, -1,
-				"inactive", cfg->opacity_inactive);
-		if (!isfinite(cfg->opacity_active) || !isfinite(cfg->opacity_inactive)
-				|| cfg->opacity_active < 0.0f || cfg->opacity_active > 1.0f
+		cfg->opacity_enabled = config_bool_field(lua, -1, "enabled",
+				cfg->opacity_enabled);
+		cfg->opacity_active = config_float_field(lua, -1, "active",
+				cfg->opacity_active);
+		cfg->opacity_inactive = config_float_field(lua, -1, "inactive",
+				cfg->opacity_inactive);
+		if (cfg->opacity_active < 0.0f || cfg->opacity_active > 1.0f
 				|| cfg->opacity_inactive < 0.0f || cfg->opacity_inactive > 1.0f)
 			luaL_error(lua, "effects.opacity values must be between 0 and 1");
 	}
@@ -715,17 +647,16 @@ config_parse_effects(lua_State *lua, Config *cfg)
 	lua_getfield(lua, -1, "shadow");
 	if (!lua_isnil(lua, -1)) {
 		luaL_checktype(lua, -1, LUA_TTABLE);
-		cfg->shadow_enabled = config_bool_field(lua, -1,
-				"enabled", cfg->shadow_enabled);
-		cfg->shadow_sigma = config_float_field(lua, -1,
-				"sigma", cfg->shadow_sigma);
-		cfg->shadow_offset_x = config_int_field(lua, -1,
-				"offset_x", cfg->shadow_offset_x);
-		cfg->shadow_offset_y = config_int_field(lua, -1,
-				"offset_y", cfg->shadow_offset_y);
+		cfg->shadow_enabled = config_bool_field(lua, -1, "enabled",
+				cfg->shadow_enabled);
+		cfg->shadow_sigma = config_float_field(lua, -1, "sigma",
+				cfg->shadow_sigma);
+		cfg->shadow_offset_x = config_int_field(lua, -1, "offset_x",
+				cfg->shadow_offset_x);
+		cfg->shadow_offset_y = config_int_field(lua, -1, "offset_y",
+				cfg->shadow_offset_y);
 		config_color_field(lua, -1, "color", cfg->shadow_color);
-		if (!isfinite(cfg->shadow_sigma) || cfg->shadow_sigma < 0.0f
-				|| cfg->shadow_sigma > 128.0f)
+		if (cfg->shadow_sigma < 0.0f || cfg->shadow_sigma > 128.0f)
 			luaL_error(lua, "effects.shadow.sigma must be between 0 and 128");
 		if (cfg->shadow_offset_x < -256 || cfg->shadow_offset_x > 256
 				|| cfg->shadow_offset_y < -256 || cfg->shadow_offset_y > 256)
@@ -736,31 +667,24 @@ config_parse_effects(lua_State *lua, Config *cfg)
 	lua_getfield(lua, -1, "blur");
 	if (!lua_isnil(lua, -1)) {
 		luaL_checktype(lua, -1, LUA_TTABLE);
-		cfg->blur_enabled = config_bool_field(lua, -1,
-				"enabled", cfg->blur_enabled);
-		cfg->blur_passes = config_int_field(lua, -1,
-				"passes", cfg->blur_passes);
-		cfg->blur_radius = config_int_field(lua, -1,
-				"radius", cfg->blur_radius);
-		cfg->blur_noise = config_float_field(lua, -1,
-				"noise", cfg->blur_noise);
-		cfg->blur_brightness = config_float_field(lua, -1,
-				"brightness", cfg->blur_brightness);
-		cfg->blur_contrast = config_float_field(lua, -1,
-				"contrast", cfg->blur_contrast);
-		cfg->blur_saturation = config_float_field(lua, -1,
-				"saturation", cfg->blur_saturation);
+		cfg->blur_enabled = config_bool_field(lua, -1, "enabled", cfg->blur_enabled);
+		cfg->blur_passes = config_int_field(lua, -1, "passes", cfg->blur_passes);
+		cfg->blur_radius = config_int_field(lua, -1, "radius", cfg->blur_radius);
+		cfg->blur_noise = config_float_field(lua, -1, "noise", cfg->blur_noise);
+		cfg->blur_brightness = config_float_field(lua, -1, "brightness",
+				cfg->blur_brightness);
+		cfg->blur_contrast = config_float_field(lua, -1, "contrast",
+				cfg->blur_contrast);
+		cfg->blur_saturation = config_float_field(lua, -1, "saturation",
+				cfg->blur_saturation);
 		cfg->blur_ignore_transparent = config_bool_field(lua, -1,
 				"ignore_transparent", cfg->blur_ignore_transparent);
 		if (cfg->blur_passes < 1 || cfg->blur_passes > 8
 				|| cfg->blur_radius < 1 || cfg->blur_radius > 64)
 			luaL_error(lua, "effects.blur passes must be 1..8 and radius 1..64");
-		if (!isfinite(cfg->blur_noise) || cfg->blur_noise < 0.0f
-				|| cfg->blur_noise > 1.0f)
+		if (cfg->blur_noise < 0.0f || cfg->blur_noise > 1.0f)
 			luaL_error(lua, "effects.blur.noise must be between 0 and 1");
-		if (!isfinite(cfg->blur_brightness) || !isfinite(cfg->blur_contrast)
-				|| !isfinite(cfg->blur_saturation)
-				|| cfg->blur_brightness < 0.0f || cfg->blur_brightness > 2.0f
+		if (cfg->blur_brightness < 0.0f || cfg->blur_brightness > 2.0f
 				|| cfg->blur_contrast < 0.0f || cfg->blur_contrast > 2.0f
 				|| cfg->blur_saturation < 0.0f || cfg->blur_saturation > 2.0f)
 			luaL_error(lua, "effects.blur color values must be between 0 and 2");
@@ -770,15 +694,14 @@ config_parse_effects(lua_State *lua, Config *cfg)
 	lua_getfield(lua, -1, "layer_shell");
 	if (!lua_isnil(lua, -1)) {
 		luaL_checktype(lua, -1, LUA_TTABLE);
-		cfg->layer_effects_enabled = config_bool_field(lua, -1,
-				"enabled", cfg->layer_effects_enabled);
-		cfg->layer_opacity = config_float_field(lua, -1,
-				"opacity", cfg->layer_opacity);
-		if (!isfinite(cfg->layer_opacity) || cfg->layer_opacity < 0.0f
-				|| cfg->layer_opacity > 1.0f)
+		cfg->layer_effects_enabled = config_bool_field(lua, -1, "enabled",
+				cfg->layer_effects_enabled);
+		cfg->layer_opacity = config_float_field(lua, -1, "opacity",
+				cfg->layer_opacity);
+		if (cfg->layer_opacity < 0.0f || cfg->layer_opacity > 1.0f)
 			luaL_error(lua, "effects.layer_shell.opacity must be between 0 and 1");
 	}
-	lua_pop(lua, 2);
+	lua_pop(lua, 1);
 }
 
 static void
@@ -791,41 +714,35 @@ config_parse_canvas(lua_State *lua, Config *cfg)
 	}
 	luaL_checktype(lua, -1, LUA_TTABLE);
 	cfg->pan_speed = config_float_field(lua, -1, "pan_speed", cfg->pan_speed);
-	if (cfg->pan_speed < -10.0f || cfg->pan_speed > 10.0f || cfg->pan_speed == 0.0f)
-		luaL_error(lua, "canvas.pan_speed must be non-zero and between -10 and 10");
 	cfg->zoom_min = config_float_field(lua, -1, "zoom_min", cfg->zoom_min);
 	cfg->zoom_max = config_float_field(lua, -1, "zoom_max", cfg->zoom_max);
 	cfg->zoom_step = config_float_field(lua, -1, "zoom_step", cfg->zoom_step);
 	cfg->window_gap = config_int_field(lua, -1, "window_gap", cfg->window_gap);
-	cfg->snap_distance = config_int_field(lua, -1,
-			"snap_distance", cfg->snap_distance);
-	cfg->edge_pan_zone = config_int_field(lua, -1,
-			"edge_pan_zone", cfg->edge_pan_zone);
-	cfg->edge_pan_min_speed = config_float_field(lua, -1,
-			"edge_pan_min_speed", cfg->edge_pan_min_speed);
-	cfg->edge_pan_max_speed = config_float_field(lua, -1,
-			"edge_pan_max_speed", cfg->edge_pan_max_speed);
-	cfg->collapsed_font_size = config_int_field(lua, -1,
-			"collapsed_font_size", cfg->collapsed_font_size);
+	cfg->snap_distance = config_int_field(lua, -1, "snap_distance", cfg->snap_distance);
+	cfg->edge_pan_zone = config_int_field(lua, -1, "edge_pan_zone", cfg->edge_pan_zone);
+	cfg->edge_pan_min_speed = config_float_field(lua, -1, "edge_pan_min_speed",
+			cfg->edge_pan_min_speed);
+	cfg->edge_pan_max_speed = config_float_field(lua, -1, "edge_pan_max_speed",
+			cfg->edge_pan_max_speed);
+	cfg->collapsed_font_size = config_int_field(lua, -1, "collapsed_font_size",
+			cfg->collapsed_font_size);
 	config_color_field(lua, -1, "collapsed_scrim", cfg->collapsed_scrim);
-	config_color_field(lua, -1, "collapsed_title_color",
-			cfg->collapsed_title_color);
-	config_color_field(lua, -1, "collapsed_detail_color",
-			cfg->collapsed_detail_color);
+	config_color_field(lua, -1, "collapsed_title_color", cfg->collapsed_title_color);
+	config_color_field(lua, -1, "collapsed_detail_color", cfg->collapsed_detail_color);
+	if (cfg->pan_speed < -10.0f || cfg->pan_speed > 10.0f || !cfg->pan_speed)
+		luaL_error(lua, "canvas.pan_speed must be non-zero and between -10 and 10");
 	if (cfg->zoom_min < 0.1f || cfg->zoom_min > 1.0f)
 		luaL_error(lua, "canvas.zoom_min must be between 0.1 and 1");
-	if (cfg->zoom_max != 1.0f || cfg->zoom_max < cfg->zoom_min)
+	if (cfg->zoom_max != CANVAS_NATIVE_ZOOM || cfg->zoom_max < cfg->zoom_min)
 		luaL_error(lua, "canvas.zoom_max must be 1 (native resolution)");
 	if (cfg->zoom_step <= 1.0f || cfg->zoom_step > 2.0f)
 		luaL_error(lua, "canvas.zoom_step must be greater than 1 and at most 2");
-	if (cfg->window_gap < 0 || cfg->window_gap > 256)
-		luaL_error(lua, "canvas.window_gap must be between 0 and 256");
-	if (cfg->snap_distance < 0 || cfg->snap_distance > 256)
-		luaL_error(lua, "canvas.snap_distance must be between 0 and 256");
+	if (cfg->window_gap < 0 || cfg->window_gap > 256
+			|| cfg->snap_distance < 0 || cfg->snap_distance > 256)
+		luaL_error(lua, "canvas gap and snap_distance must be between 0 and 256");
 	if (cfg->edge_pan_zone < 0 || cfg->edge_pan_zone > 512)
 		luaL_error(lua, "canvas.edge_pan_zone must be between 0 and 512");
-	if (!isfinite(cfg->edge_pan_min_speed) || !isfinite(cfg->edge_pan_max_speed)
-			|| cfg->edge_pan_min_speed < 0.0f
+	if (cfg->edge_pan_min_speed < 0.0f
 			|| cfg->edge_pan_min_speed > cfg->edge_pan_max_speed
 			|| cfg->edge_pan_max_speed > 5000.0f)
 		luaL_error(lua, "canvas edge pan speeds must satisfy 0 <= min <= max <= 5000");
@@ -844,9 +761,9 @@ config_parse_logging(lua_State *lua, Config *cfg)
 		lua_pop(lua, 1);
 		return;
 	}
-	if (lua_isstring(lua, -1))
+	if (lua_isstring(lua, -1)) {
 		level = lua_tostring(lua, -1);
-	else {
+	} else {
 		luaL_checktype(lua, -1, LUA_TTABLE);
 		lua_getfield(lua, -1, "level");
 		level = luaL_checkstring(lua, -1);
@@ -866,24 +783,12 @@ config_parse_logging(lua_State *lua, Config *cfg)
 }
 
 static void
-config_clear_layouts(Config *cfg)
-{
-	size_t i;
-	for (i = 0; i < cfg->layout_count; i++) {
-		free(cfg->layouts[i].name);
-		free((char *)cfg->layouts[i].symbol);
-	}
-	free(cfg->layouts);
-	cfg->layouts = NULL;
-	cfg->layout_count = 0;
-}
-
-static void
 config_clear_rules(Config *cfg)
 {
 	size_t i;
+
 	for (i = 0; i < cfg->rule_count; i++) {
-		free((char *)cfg->rules[i].id);
+		free((char *)cfg->rules[i].app_id);
 		free((char *)cfg->rules[i].title);
 	}
 	free(cfg->rules);
@@ -895,6 +800,7 @@ static void
 config_clear_monrules(Config *cfg)
 {
 	size_t i;
+
 	for (i = 0; i < cfg->monrule_count; i++)
 		free((char *)cfg->monrules[i].name);
 	free(cfg->monrules);
@@ -906,6 +812,7 @@ static void
 config_clear_keys(Config *cfg)
 {
 	size_t i;
+
 	for (i = 0; i < cfg->key_count; i++)
 		if (cfg->keys[i].func == spawn)
 			config_free_argv((char **)cfg->keys[i].arg.v);
@@ -918,6 +825,7 @@ static void
 config_clear_buttons(Config *cfg)
 {
 	size_t i;
+
 	for (i = 0; i < cfg->button_count; i++)
 		if (cfg->buttons[i].func == spawn)
 			config_free_argv((char **)cfg->buttons[i].arg.v);
@@ -927,83 +835,12 @@ config_clear_buttons(Config *cfg)
 }
 
 static void
-config_parse_layouts(lua_State *lua, Config *cfg)
-{
-	size_t i, length;
-	char **key_layouts, **mon_layouts;
-	const char *name, *symbol, *arrange_name;
-	void (*arrange_fn)(Monitor *) = NULL;
-
-	lua_getfield(lua, 1, "layouts");
-	if (lua_isnil(lua, -1)) {
-		lua_pop(lua, 1);
-		return;
-	}
-	luaL_checktype(lua, -1, LUA_TTABLE);
-	length = lua_rawlen(lua, -1);
-	if (!length)
-		luaL_error(lua, "layouts cannot be empty");
-	key_layouts = ecalloc(cfg->key_count, sizeof(*key_layouts));
-	for (i = 0; i < cfg->key_count; i++)
-		if (cfg->keys[i].func == setlayout && cfg->keys[i].arg.v)
-			key_layouts[i] = config_strdup(((Layout *)cfg->keys[i].arg.v)->name);
-	mon_layouts = ecalloc(cfg->monrule_count, sizeof(*mon_layouts));
-	for (i = 0; i < cfg->monrule_count; i++)
-		if (cfg->monrules[i].lt)
-			mon_layouts[i] = config_strdup(cfg->monrules[i].lt->name);
-	config_clear_layouts(cfg);
-	for (i = 1; i <= length; i++) {
-		lua_rawgeti(lua, -1, (lua_Integer)i);
-		luaL_checktype(lua, -1, LUA_TTABLE);
-		lua_getfield(lua, -1, "name");
-		name = luaL_checkstring(lua, -1);
-		lua_pop(lua, 1);
-		lua_getfield(lua, -1, "symbol");
-		symbol = luaL_checkstring(lua, -1);
-		lua_pop(lua, 1);
-		lua_getfield(lua, -1, "arrange");
-		arrange_name = lua_isnil(lua, -1) ? "floating" : luaL_checkstring(lua, -1);
-		if (!strcmp(arrange_name, "tile"))
-			arrange_fn = tile;
-		else if (!strcmp(arrange_name, "monocle"))
-			arrange_fn = monocle;
-		else if (!strcmp(arrange_name, "floating") || !strcmp(arrange_name, "canvas")
-				|| !strcmp(arrange_name, "none"))
-			arrange_fn = NULL;
-		else
-			luaL_error(lua, "unknown layout arrange function '%s'", arrange_name);
-		lua_pop(lua, 1);
-		config_append_layout(cfg, name, symbol, arrange_fn);
-		lua_pop(lua, 1);
-	}
-	for (i = 0; i < cfg->key_count; i++) {
-		if (key_layouts[i]) {
-			cfg->keys[i].arg.v = config_find_layout(cfg, key_layouts[i]);
-			if (!cfg->keys[i].arg.v)
-				cfg->keys[i].arg.v = &cfg->layouts[0];
-			free(key_layouts[i]);
-		}
-	}
-	for (i = 0; i < cfg->monrule_count; i++) {
-		if (mon_layouts[i]) {
-			cfg->monrules[i].lt = config_find_layout(cfg, mon_layouts[i]);
-			if (!cfg->monrules[i].lt)
-				cfg->monrules[i].lt = &cfg->layouts[0];
-			free(mon_layouts[i]);
-		}
-	}
-	free(key_layouts);
-	free(mon_layouts);
-	lua_pop(lua, 1);
-}
-
-static void
 config_parse_rules(lua_State *lua, Config *cfg)
 {
+	const char *app_id, *title;
 	size_t i, length;
-	const char *id, *title;
-	int floating, monitor;
-	lua_Integer tags, monitor_value;
+	lua_Integer monitor_value;
+	int monitor;
 
 	lua_getfield(lua, 1, "rules");
 	if (lua_isnil(lua, -1)) {
@@ -1017,41 +854,22 @@ config_parse_rules(lua_State *lua, Config *cfg)
 		lua_rawgeti(lua, -1, (lua_Integer)i);
 		luaL_checktype(lua, -1, LUA_TTABLE);
 		lua_getfield(lua, -1, "app_id");
-		id = lua_isnil(lua, -1) ? NULL : luaL_checkstring(lua, -1);
+		app_id = lua_isnil(lua, -1) ? NULL : luaL_checkstring(lua, -1);
 		lua_pop(lua, 1);
-		if (!id) {
-			lua_getfield(lua, -1, "id");
-			id = lua_isnil(lua, -1) ? NULL : luaL_checkstring(lua, -1);
-			lua_pop(lua, 1);
-		}
 		lua_getfield(lua, -1, "title");
 		title = lua_isnil(lua, -1) ? NULL : luaL_checkstring(lua, -1);
 		lua_pop(lua, 1);
-		lua_getfield(lua, -1, "tags");
-		tags = lua_isnil(lua, -1) ? 0 : luaL_checkinteger(lua, -1);
-		lua_pop(lua, 1);
-		lua_getfield(lua, -1, "floating");
-		if (lua_isnil(lua, -1))
-			floating = 0;
-		else {
-			if (!lua_isboolean(lua, -1))
-				luaL_error(lua, "floating must be boolean");
-			floating = lua_toboolean(lua, -1);
-		}
-		lua_pop(lua, 1);
 		lua_getfield(lua, -1, "monitor");
-		if (lua_isnil(lua, -1))
+		if (lua_isnil(lua, -1)) {
 			monitor = -1;
-		else {
+		} else {
 			monitor_value = luaL_checkinteger(lua, -1);
 			if (monitor_value < -1 || monitor_value > INT_MAX)
 				luaL_error(lua, "monitor index is out of range");
 			monitor = (int)monitor_value;
 		}
 		lua_pop(lua, 1);
-		if (tags < 0 || (lua_Unsigned)tags > UINT32_MAX)
-			luaL_error(lua, "invalid client rule values");
-		config_append_rule(cfg, id, title, (uint32_t)tags, floating, monitor);
+		config_append_rule(cfg, app_id, title, monitor);
 		lua_pop(lua, 1);
 	}
 	lua_pop(lua, 1);
@@ -1060,18 +878,13 @@ config_parse_rules(lua_State *lua, Config *cfg)
 static void
 config_parse_monrules(lua_State *lua, Config *cfg)
 {
-	size_t i, length;
-	const char *name, *layout_name;
-	Layout *layout;
-	float mfact, scale;
-	int nmaster, x, y;
+	const char *name;
 	enum wl_output_transform transform;
+	size_t i, length;
+	float scale;
+	int fallback = 0, x, y;
 
 	lua_getfield(lua, 1, "monitors");
-	if (lua_isnil(lua, -1)) {
-		lua_pop(lua, 1);
-		lua_getfield(lua, 1, "monitor_rules");
-	}
 	if (lua_isnil(lua, -1)) {
 		lua_pop(lua, 1);
 		return;
@@ -1087,30 +900,22 @@ config_parse_monrules(lua_State *lua, Config *cfg)
 		lua_getfield(lua, -1, "name");
 		name = lua_isnil(lua, -1) ? NULL : luaL_checkstring(lua, -1);
 		lua_pop(lua, 1);
-		mfact = config_float_field(lua, -1, "mfact", 0.55f);
-		nmaster = config_int_field(lua, -1, "nmaster", 1);
 		scale = config_float_field(lua, -1, "scale", 1.0f);
 		x = config_int_field(lua, -1, "x", -1);
 		y = config_int_field(lua, -1, "y", -1);
-		lua_getfield(lua, -1, "layout");
-		layout_name = lua_isnil(lua, -1) ? cfg->layouts[0].name : luaL_checkstring(lua, -1);
-		layout = config_find_layout(cfg, layout_name);
-		lua_pop(lua, 1);
-		if (!layout)
-			luaL_error(lua, "unknown monitor layout '%s'", layout_name);
 		lua_getfield(lua, -1, "transform");
-		if (lua_isnil(lua, -1))
-			transform = WL_OUTPUT_TRANSFORM_NORMAL;
-		else
-			transform = config_transform(lua, -1);
+		transform = lua_isnil(lua, -1) ? WL_OUTPUT_TRANSFORM_NORMAL
+			: config_transform(lua, -1);
 		lua_pop(lua, 1);
-		if (mfact < 0.1f || mfact > 0.9f || nmaster < 0 || scale <= 0.0f
-				|| (x < -1 || y < -1) || ((x == -1) != (y == -1)))
+		if (scale <= 0.0f || (x < -1 || y < -1) || ((x == -1) != (y == -1)))
 			luaL_error(lua, "invalid monitor rule values");
-		config_append_monrule(cfg, name, mfact, nmaster, scale, layout,
-				transform, x, y);
+		if (!name && ++fallback > 1)
+			luaL_error(lua, "monitors can define only one fallback rule");
+		config_append_monrule(cfg, name, scale, transform, x, y);
 		lua_pop(lua, 1);
 	}
+	if (!fallback)
+		luaL_error(lua, "monitors requires a fallback rule with name = nil");
 	lua_pop(lua, 1);
 }
 
@@ -1146,7 +951,6 @@ config_parse_keyboard(lua_State *lua, Config *cfg)
 		cfg->xkb_rules.layout = config_strdup(field);
 	}
 	lua_pop(lua, 1);
-	lua_pop(lua, 1);
 }
 
 static int
@@ -1155,31 +959,20 @@ config_enum_field(lua_State *lua, int index, const char *name,
 {
 	const char *value;
 	size_t i;
-	lua_Integer integer;
 
 	lua_getfield(lua, index, name);
 	if (lua_isnil(lua, -1)) {
 		lua_pop(lua, 1);
 		return current;
 	}
-	if (lua_isnumber(lua, -1)) {
-		integer = luaL_checkinteger(lua, -1);
-		lua_pop(lua, 1);
-		if (integer < INT_MIN || integer > INT_MAX)
-			luaL_error(lua, "%s value is out of range", name);
-		for (i = 0; i < count; i++)
-			if ((int)integer == values[i])
-				return (int)integer;
-		luaL_error(lua, "invalid %s value", name);
-		return current;
-	}
 	value = luaL_checkstring(lua, -1);
-	for (i = 0; i < count; i++)
+	for (i = 0; i < count; i++) {
 		if (!strcasecmp(value, names[i])) {
 			lua_pop(lua, 1);
 			return values[i];
 		}
-	luaL_error(lua, "unknown %s value '%s'", name, value);
+	}
+	luaL_error(lua, "unknown %s '%s'", name, value);
 	return current;
 }
 
@@ -1187,21 +980,36 @@ static void
 config_parse_libinput(lua_State *lua, Config *cfg)
 {
 	static const char *const scroll_names[] = {"none", "2fg", "edge", "button"};
-	static const int scroll_values[] = {LIBINPUT_CONFIG_SCROLL_NO_SCROLL,
-		LIBINPUT_CONFIG_SCROLL_2FG, LIBINPUT_CONFIG_SCROLL_EDGE,
-		LIBINPUT_CONFIG_SCROLL_ON_BUTTON_DOWN};
+	static const int scroll_values[] = {
+		LIBINPUT_CONFIG_SCROLL_NO_SCROLL,
+		LIBINPUT_CONFIG_SCROLL_2FG,
+		LIBINPUT_CONFIG_SCROLL_EDGE,
+		LIBINPUT_CONFIG_SCROLL_ON_BUTTON_DOWN,
+	};
 	static const char *const click_names[] = {"none", "button_areas", "clickfinger"};
-	static const int click_values[] = {LIBINPUT_CONFIG_CLICK_METHOD_NONE,
-		LIBINPUT_CONFIG_CLICK_METHOD_BUTTON_AREAS, LIBINPUT_CONFIG_CLICK_METHOD_CLICKFINGER};
-	static const char *const send_names[] = {"enabled", "disabled", "disabled_on_external_mouse"};
-	static const int send_values[] = {LIBINPUT_CONFIG_SEND_EVENTS_ENABLED,
+	static const int click_values[] = {
+		LIBINPUT_CONFIG_CLICK_METHOD_NONE,
+		LIBINPUT_CONFIG_CLICK_METHOD_BUTTON_AREAS,
+		LIBINPUT_CONFIG_CLICK_METHOD_CLICKFINGER,
+	};
+	static const char *const send_names[] = {
+		"enabled", "disabled", "disabled_on_external_mouse",
+	};
+	static const int send_values[] = {
+		LIBINPUT_CONFIG_SEND_EVENTS_ENABLED,
 		LIBINPUT_CONFIG_SEND_EVENTS_DISABLED,
-		LIBINPUT_CONFIG_SEND_EVENTS_DISABLED_ON_EXTERNAL_MOUSE};
+		LIBINPUT_CONFIG_SEND_EVENTS_DISABLED_ON_EXTERNAL_MOUSE,
+	};
 	static const char *const accel_names[] = {"flat", "adaptive"};
-	static const int accel_values[] = {LIBINPUT_CONFIG_ACCEL_PROFILE_FLAT,
-		LIBINPUT_CONFIG_ACCEL_PROFILE_ADAPTIVE};
+	static const int accel_values[] = {
+		LIBINPUT_CONFIG_ACCEL_PROFILE_FLAT,
+		LIBINPUT_CONFIG_ACCEL_PROFILE_ADAPTIVE,
+	};
 	static const char *const map_names[] = {"lrm", "lmr"};
-	static const int map_values[] = {LIBINPUT_CONFIG_TAP_MAP_LRM, LIBINPUT_CONFIG_TAP_MAP_LMR};
+	static const int map_values[] = {
+		LIBINPUT_CONFIG_TAP_MAP_LRM,
+		LIBINPUT_CONFIG_TAP_MAP_LMR,
+	};
 
 	lua_getfield(lua, 1, "libinput");
 	if (lua_isnil(lua, -1)) {
@@ -1212,22 +1020,30 @@ config_parse_libinput(lua_State *lua, Config *cfg)
 	cfg->tap_to_click = config_bool_field(lua, -1, "tap_to_click", cfg->tap_to_click);
 	cfg->tap_and_drag = config_bool_field(lua, -1, "tap_and_drag", cfg->tap_and_drag);
 	cfg->drag_lock = config_bool_field(lua, -1, "drag_lock", cfg->drag_lock);
-	cfg->natural_scrolling = config_bool_field(lua, -1, "natural_scrolling", cfg->natural_scrolling);
-	cfg->disable_while_typing = config_bool_field(lua, -1, "disable_while_typing", cfg->disable_while_typing);
+	cfg->natural_scrolling = config_bool_field(lua, -1, "natural_scrolling",
+			cfg->natural_scrolling);
+	cfg->disable_while_typing = config_bool_field(lua, -1, "disable_while_typing",
+			cfg->disable_while_typing);
 	cfg->left_handed = config_bool_field(lua, -1, "left_handed", cfg->left_handed);
 	cfg->middle_button_emulation = config_bool_field(lua, -1,
 			"middle_button_emulation", cfg->middle_button_emulation);
-	cfg->scroll_method = (enum libinput_config_scroll_method)config_enum_field(lua, -1,
-			"scroll_method", scroll_names, scroll_values, LENGTH(scroll_names), cfg->scroll_method);
-	cfg->click_method = (enum libinput_config_click_method)config_enum_field(lua, -1,
-			"click_method", click_names, click_values, LENGTH(click_names), cfg->click_method);
+	cfg->scroll_method = (enum libinput_config_scroll_method)config_enum_field(lua,
+			-1, "scroll_method", scroll_names, scroll_values, LENGTH(scroll_names),
+			cfg->scroll_method);
+	cfg->click_method = (enum libinput_config_click_method)config_enum_field(lua,
+			-1, "click_method", click_names, click_values, LENGTH(click_names),
+			cfg->click_method);
 	cfg->send_events_mode = (uint32_t)config_enum_field(lua, -1,
-			"send_events_mode", send_names, send_values, LENGTH(send_names), cfg->send_events_mode);
-	cfg->accel_profile = (enum libinput_config_accel_profile)config_enum_field(lua, -1,
-			"accel_profile", accel_names, accel_values, LENGTH(accel_names), cfg->accel_profile);
-	cfg->accel_speed = config_float_field(lua, -1, "accel_speed", (float)cfg->accel_speed);
-	cfg->button_map = (enum libinput_config_tap_button_map)config_enum_field(lua, -1,
-			"button_map", map_names, map_values, LENGTH(map_names), cfg->button_map);
+			"send_events_mode", send_names, send_values, LENGTH(send_names),
+			cfg->send_events_mode);
+	cfg->accel_profile = (enum libinput_config_accel_profile)config_enum_field(lua,
+			-1, "accel_profile", accel_names, accel_values, LENGTH(accel_names),
+			cfg->accel_profile);
+	cfg->accel_speed = config_float_field(lua, -1, "accel_speed",
+			(float)cfg->accel_speed);
+	cfg->button_map = (enum libinput_config_tap_button_map)config_enum_field(lua,
+			-1, "button_map", map_names, map_values, LENGTH(map_names),
+			cfg->button_map);
 	if (cfg->accel_speed < -1.0 || cfg->accel_speed > 1.0)
 		luaL_error(lua, "accel_speed must be between -1 and 1");
 	lua_pop(lua, 1);
@@ -1251,7 +1067,7 @@ config_parse_bindings(lua_State *lua, Config *cfg, const char *field, int button
 	length = lua_rawlen(lua, -1);
 	for (i = 1; i <= length; i++) {
 		lua_rawgeti(lua, -1, (lua_Integer)i);
-		config_parse_key(lua, cfg, -1, button);
+		config_parse_binding(lua, cfg, -1, button);
 		lua_pop(lua, 1);
 	}
 	lua_pop(lua, 1);
@@ -1260,39 +1076,19 @@ config_parse_bindings(lua_State *lua, Config *cfg, const char *field, int button
 static int
 config_parse_root(lua_State *lua, Config *cfg)
 {
-	lua_Integer tagcount;
-
 	luaL_checktype(lua, 1, LUA_TTABLE);
 	config_parse_appearance(lua, cfg);
 	config_parse_effects(lua, cfg);
 	config_parse_canvas(lua, cfg);
 	config_parse_logging(lua, cfg);
-	cfg->tagcount = config_int_field(lua, 1, "tagcount", cfg->tagcount);
-	if (cfg->tagcount < 1 || cfg->tagcount > 31)
-		luaL_error(lua, "tagcount must be between 1 and 31");
-	lua_getfield(lua, 1, "tags");
-	if (lua_isnumber(lua, -1)) {
-		tagcount = luaL_checkinteger(lua, -1);
-		if (tagcount < 1 || tagcount > 31)
-			luaL_error(lua, "tags must be between 1 and 31");
-		cfg->tagcount = (int)tagcount;
-	} else if (!lua_isnil(lua, -1)) {
-		luaL_checktype(lua, -1, LUA_TTABLE);
-		cfg->tagcount = config_int_field(lua, -1, "count", cfg->tagcount);
-	}
-	lua_pop(lua, 1);
-	if (cfg->tagcount < 1 || cfg->tagcount > 31)
-		luaL_error(lua, "tagcount must be between 1 and 31");
-	config_parse_layouts(lua, cfg);
 	config_parse_rules(lua, cfg);
 	config_parse_monrules(lua, cfg);
 	config_parse_keyboard(lua, cfg);
 	config_parse_libinput(lua, cfg);
 	config_parse_bindings(lua, cfg, "keys", 0);
 	config_parse_bindings(lua, cfg, "buttons", 1);
-	if (!cfg->layout_count || !cfg->monrule_count || !cfg->key_count
-			|| !cfg->button_count)
-		luaL_error(lua, "layouts, monitors, keys, and buttons cannot be empty");
+	if (!cfg->monrule_count)
+		luaL_error(lua, "monitors cannot be empty");
 	return 0;
 }
 
@@ -1300,13 +1096,15 @@ static int
 config_parse_root_call(lua_State *lua)
 {
 	Config *cfg = lua_touserdata(lua, lua_upvalueindex(1));
+
 	return config_parse_root(lua, cfg);
 }
 
 static void
 config_set_color(float color[4], unsigned int rgba)
 {
-	int i;
+	size_t i;
+
 	for (i = 0; i < 4; i++)
 		color[i] = (float)((rgba >> (24 - i * 8)) & 0xff) / 255.0f;
 }
@@ -1330,11 +1128,10 @@ config_defaults(Config *cfg)
 		XKB_KEY_XF86Switch_VT_11, XKB_KEY_XF86Switch_VT_12,
 	};
 	uint32_t mod = WLR_MODIFIER_LOGO;
-	int i;
+	size_t i;
 
 	memset(cfg, 0, sizeof(*cfg));
 	cfg->sloppyfocus = 1;
-	cfg->bypass_surface_visibility = 0;
 	cfg->borderpx = 1;
 	config_set_color(cfg->rootcolor, 0x222222ff);
 	config_set_color(cfg->bordercolor, 0x444444ff);
@@ -1342,23 +1139,17 @@ config_defaults(Config *cfg)
 	config_set_color(cfg->urgentcolor, 0xff0000ff);
 	config_set_color(cfg->fullscreen_bg, 0x000000ff);
 	cfg->corner_radius = 8;
-	cfg->opacity_enabled = 0;
 	cfg->opacity_active = 1.0f;
 	cfg->opacity_inactive = 1.0f;
-	cfg->shadow_enabled = 0;
 	cfg->shadow_sigma = 18.0f;
-	cfg->shadow_offset_x = 0;
 	cfg->shadow_offset_y = 6;
 	config_set_color(cfg->shadow_color, 0x00000066);
-	cfg->blur_enabled = 0;
 	cfg->blur_passes = 2;
 	cfg->blur_radius = 4;
-	cfg->blur_noise = 0.0f;
 	cfg->blur_brightness = 0.9f;
 	cfg->blur_contrast = 0.9f;
 	cfg->blur_saturation = 1.1f;
 	cfg->blur_ignore_transparent = 1;
-	cfg->layer_effects_enabled = 0;
 	cfg->layer_opacity = 1.0f;
 	cfg->pan_speed = 1.0f;
 	cfg->zoom_min = 0.25f;
@@ -1373,35 +1164,27 @@ config_defaults(Config *cfg)
 	config_set_color(cfg->collapsed_scrim, 0x00000099);
 	config_set_color(cfg->collapsed_title_color, 0xffffffff);
 	config_set_color(cfg->collapsed_detail_color, 0xb8b8b8ff);
-	cfg->tagcount = 1;
 	cfg->log_level = WLR_ERROR;
 	cfg->repeat_rate = 25;
 	cfg->repeat_delay = 600;
 	cfg->tap_to_click = 1;
 	cfg->tap_and_drag = 1;
 	cfg->drag_lock = 1;
-	cfg->natural_scrolling = 0;
 	cfg->disable_while_typing = 1;
-	cfg->left_handed = 0;
-	cfg->middle_button_emulation = 0;
 	cfg->scroll_method = LIBINPUT_CONFIG_SCROLL_2FG;
 	cfg->click_method = LIBINPUT_CONFIG_CLICK_METHOD_BUTTON_AREAS;
 	cfg->send_events_mode = LIBINPUT_CONFIG_SEND_EVENTS_ENABLED;
 	cfg->accel_profile = LIBINPUT_CONFIG_ACCEL_PROFILE_ADAPTIVE;
-	cfg->accel_speed = 0.0;
 	cfg->button_map = LIBINPUT_CONFIG_TAP_MAP_LRM;
 
-	config_append_layout(cfg, "canvas", "[ ]", NULL);
-	config_append_monrule(cfg, NULL, 0.55f, 1, 1.0f,
-			&cfg->layouts[0], WL_OUTPUT_TRANSFORM_NORMAL, -1, -1);
-
+	config_append_monrule(cfg, NULL, 1.0f, WL_OUTPUT_TRANSFORM_NORMAL, -1, -1);
 	config_append_key(cfg, mod, XKB_KEY_p, 0, spawn,
 			(Arg){.v = config_exec("wmenu-run")});
 	config_append_key(cfg, mod, XKB_KEY_Return, 0, spawn,
 			(Arg){.v = config_exec("foot")});
 	config_default_key(cfg, WLR_MODIFIER_ALT, XKB_KEY_Tab, focusstack, (Arg){.i = 1});
-	config_default_key(cfg, WLR_MODIFIER_ALT | WLR_MODIFIER_SHIFT, XKB_KEY_ISO_Left_Tab,
-			focusstack, (Arg){.i = -1});
+	config_default_key(cfg, WLR_MODIFIER_ALT | WLR_MODIFIER_SHIFT,
+			XKB_KEY_ISO_Left_Tab, focusstack, (Arg){.i = -1});
 	config_default_key(cfg, mod, XKB_KEY_c, centercanvas, (Arg){0});
 	config_default_key(cfg, mod, XKB_KEY_0, homecanvas, (Arg){0});
 	config_default_key(cfg, mod, XKB_KEY_minus, zoomcanvas, (Arg){.f = -1.0f});
@@ -1413,14 +1196,14 @@ config_defaults(Config *cfg)
 			(Arg){.i = WLR_DIRECTION_LEFT});
 	config_default_key(cfg, mod, XKB_KEY_period, focusmon,
 			(Arg){.i = WLR_DIRECTION_RIGHT});
-	config_default_key(cfg, mod | WLR_MODIFIER_SHIFT, XKB_KEY_less, tagmon,
+	config_default_key(cfg, mod | WLR_MODIFIER_SHIFT, XKB_KEY_less, sendtomonitor,
 			(Arg){.i = WLR_DIRECTION_LEFT});
-	config_default_key(cfg, mod | WLR_MODIFIER_SHIFT, XKB_KEY_greater, tagmon,
+	config_default_key(cfg, mod | WLR_MODIFIER_SHIFT, XKB_KEY_greater, sendtomonitor,
 			(Arg){.i = WLR_DIRECTION_RIGHT});
 	config_default_key(cfg, mod | WLR_MODIFIER_SHIFT, XKB_KEY_q, quit, (Arg){0});
-	for (i = 0; i < 12; i++)
+	for (i = 0; i < LENGTH(vt_keys); i++)
 		config_default_key(cfg, WLR_MODIFIER_CTRL | WLR_MODIFIER_ALT,
-				vt_keys[i], chvt, (Arg){.ui = (unsigned int)i + 1});
+				vt_keys[i], chvt, (Arg){.ui = (uint32_t)i + 1});
 	config_append_button(cfg, mod, BTN_LEFT, moveresize, (Arg){.ui = CurMove});
 	config_append_button(cfg, mod, BTN_MIDDLE, startpan, (Arg){0});
 	config_append_button(cfg, mod, BTN_RIGHT, moveresize, (Arg){.ui = CurResize});
@@ -1429,9 +1212,9 @@ config_defaults(Config *cfg)
 static int
 config_parse_file(const char *path, Config *next)
 {
+	const char *error;
 	lua_State *lua;
 	int status;
-	const char *error;
 
 	lua = luaL_newstate();
 	if (!lua)
@@ -1486,20 +1269,18 @@ config_find_path(const char *path)
 	if ((path = getenv("INCA_CONFIG")))
 		return config_strdup(path);
 	base = getenv("XDG_CONFIG_HOME");
-	if (base && (candidate = config_path_candidate(base))) {
+	if (base) {
+		candidate = config_path_candidate(base);
 		if (!access(candidate, R_OK))
 			return candidate;
 		free(candidate);
 	}
 	if (!access(INCA_SYSTEM_CONFIG, R_OK))
 		return config_strdup(INCA_SYSTEM_CONFIG);
-	/* The source tree ships a usable example for development and packaging. */
 	if (!access("config/config.lua", R_OK))
 		return config_strdup("config/config.lua");
-	if ((base = getenv("HOME"))) {
-		candidate = config_path_candidate(base);
-		return candidate;
-	}
+	if ((base = getenv("HOME")))
+		return config_path_candidate(base);
 	return config_strdup("config/config.lua");
 }
 
@@ -1523,7 +1304,7 @@ config_split_path(void)
 		*slash = '\0';
 }
 
-static int
+int
 config_init(const char *path)
 {
 	Config next;
@@ -1533,6 +1314,7 @@ config_init(const char *path)
 	config_defaults(&config);
 	if (!access(config_file, R_OK) && !config_parse_file(config_file, &next)) {
 		Config old = config;
+
 		config = next;
 		config_free(&old);
 	} else if (access(config_file, R_OK)) {
@@ -1545,8 +1327,8 @@ static int
 config_inotify(int fd, uint32_t mask, void *data)
 {
 	char buffer[4096];
-	ssize_t length;
 	char *offset;
+	ssize_t length;
 	struct inotify_event *event;
 
 	(void)mask;
@@ -1563,7 +1345,7 @@ config_inotify(int fd, uint32_t mask, void *data)
 	return 0;
 }
 
-static void
+void
 config_watch_start(void)
 {
 	if (!event_loop || config_fd >= 0)
@@ -1576,7 +1358,8 @@ config_watch_start(void)
 	config_watch = inotify_add_watch(config_fd, config_dir,
 			IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE | IN_DELETE);
 	if (config_watch < 0) {
-		fprintf(stderr, "inca: config watcher: %s: %s\n", config_dir, strerror(errno));
+		fprintf(stderr, "inca: config watcher: %s: %s\n", config_dir,
+				strerror(errno));
 		close(config_fd);
 		config_fd = -1;
 		return;
@@ -1592,7 +1375,7 @@ config_watch_start(void)
 	}
 }
 
-static void
+void
 config_watch_stop(void)
 {
 	if (config_source) {
@@ -1613,14 +1396,18 @@ config_watch_stop(void)
 	config_file = NULL;
 }
 
-static const MonitorRule *
+const MonitorRule *
 config_monitor_rule(const Config *cfg, const char *name)
 {
 	size_t i;
+
 	for (i = 0; i < cfg->monrule_count; i++)
-		if (!cfg->monrules[i].name || strstr(name, cfg->monrules[i].name))
+		if (cfg->monrules[i].name && strstr(name, cfg->monrules[i].name))
 			return &cfg->monrules[i];
-	return &cfg->monrules[cfg->monrule_count - 1];
+	for (i = 0; i < cfg->monrule_count; i++)
+		if (!cfg->monrules[i].name)
+			return &cfg->monrules[i];
+	return NULL;
 }
 
 static void
@@ -1647,14 +1434,11 @@ config_apply_keyboard(void)
 }
 
 static void
-config_apply_live(const Config *old)
+config_apply_live(void)
 {
-	Monitor *m;
 	Client *c;
+	Monitor *m;
 	const MonitorRule *rule;
-	Layout *layout;
-	const char *name;
-	int i;
 	struct wlr_output_state state;
 
 	wlr_log_init(config.log_level, NULL);
@@ -1664,21 +1448,16 @@ config_apply_live(const Config *old)
 		wlr_scene_set_blur_data(scene,
 				config.blur_enabled ? config.blur_passes : 0,
 				config.blur_enabled ? config.blur_radius : 0,
-				config.blur_noise, config.blur_brightness,
-				config.blur_contrast, config.blur_saturation);
+				config.blur_noise, config.blur_brightness, config.blur_contrast,
+				config.blur_saturation);
 	wl_list_for_each(m, &mons, link) {
-		for (i = 0; i < 2; i++) {
-			name = (old && m->lt[i]) ? m->lt[i]->name : NULL;
-			layout = config_find_layout(&config, name);
-			m->lt[i] = layout ? layout : &config.layouts[0];
-		}
 		rule = config_monitor_rule(&config, m->wlr_output->name);
-		m->mfact = rule->mfact;
-		m->nmaster = rule->nmaster;
-		m->canvas_zoom = canvas_clamp_zoom(config.zoom_min,
-				config.zoom_max, m->canvas_zoom);
-		m->canvas_zoom_target = canvas_clamp_zoom(config.zoom_min,
-				config.zoom_max, m->canvas_zoom_target);
+		if (!rule)
+			continue;
+		m->canvas_zoom = canvas_clamp_zoom(config.zoom_min, config.zoom_max,
+				m->canvas_zoom);
+		m->canvas_zoom_target = canvas_clamp_zoom(config.zoom_min, config.zoom_max,
+				m->canvas_zoom_target);
 		if (m->fullscreen_bg)
 			wlr_scene_rect_set_color(m->fullscreen_bg, config.fullscreen_bg);
 		wlr_output_state_init(&state);
@@ -1691,16 +1470,14 @@ config_apply_live(const Config *old)
 	}
 	layereffectsupdateall();
 	wl_list_for_each(c, &clients, link) {
-		if (client_is_unmanaged(c))
-			continue;
 		c->bw = c->isfullscreen ? 0 : config.borderpx;
-		if (c->scene) {
-			client_set_border_color(c, c == focustop(c->mon) ? config.focuscolor
-					: c->isurgent ? config.urgentcolor : config.bordercolor);
-			if (c->iscollapsed)
-				clientcollapsedupdate(c, 1);
-			resize(c, c->geom, 0);
-		}
+		if (!c->scene)
+			continue;
+		client_set_border_color(c, c == focustop(c->mon) ? config.focuscolor
+				: c->isurgent ? config.urgentcolor : config.bordercolor);
+		if (c->iscollapsed)
+			clientcollapsedupdate(c, 1);
+		resize(c, c->geom, 0);
 	}
 	config_apply_keyboard();
 	printstatus();
@@ -1716,7 +1493,7 @@ config_reload(void)
 		return;
 	old = config;
 	config = next;
-	config_apply_live(&old);
+	config_apply_live();
 	config_free(&old);
 	fprintf(stderr, "inca: reloaded config %s\n", config_file);
 }

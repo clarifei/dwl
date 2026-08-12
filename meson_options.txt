@@ -1,0 +1,6 @@
+option(
+  'native_optimizations',
+  type: 'boolean',
+  value: true,
+  description: 'Optimize local release builds for the build machine CPU',
+)

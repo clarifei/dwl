@@ -22,8 +22,9 @@ Inca! needs a C compiler, `pkg-config`, Wayland protocols, wlroots 0.19,
 SceneFX 0.4, libinput, xkbcommon, Lua 5.4, Cairo, Fontconfig, libdrm, and pixman.
 
 ```sh
-make
-sudo make install
+meson setup build
+meson compile -C build
+meson install -C build
 ```
 
 Run it from a display manager session or directly:

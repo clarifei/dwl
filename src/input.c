@@ -1,6 +1,8 @@
 /* See LICENSE file for copyright and license details. */
 /* Keyboard, pointer, cursor, bindings, and input-device handling. */
 
+#include "inca.h"
+
 void
 axisnotify(struct wl_listener *listener, void *data)
 {
@@ -22,12 +24,12 @@ axisnotify(struct wl_listener *listener, void *data)
 	mods = keyboard ? wlr_keyboard_get_modifiers(keyboard) : 0;
 	wheel = event->source == WL_POINTER_AXIS_SOURCE_WHEEL
 			|| event->source == WL_POINTER_AXIS_SOURCE_WHEEL_TILT;
-	if (!locked && ISCANVAS(m) && (CLEANMASK(mods) & WLR_MODIFIER_LOGO)) {
+	if (!locked && m && (CLEANMASK(mods) & WLR_MODIFIER_LOGO)) {
 		if (event->orientation == WL_POINTER_AXIS_VERTICAL_SCROLL)
 			zoomcanvasby(m, canvas_zoom_factor(config.zoom_step, event->delta));
 		return;
 	}
-	if (!locked && ISCANVAS(m) && !surface && !c) {
+	if (!locked && m && !surface && !c) {
 		if (wheel && event->orientation == WL_POINTER_AXIS_VERTICAL_SCROLL) {
 			zoomcanvasby(m, canvas_zoom_factor(config.zoom_step, event->delta));
 			return;
@@ -68,7 +70,7 @@ buttonpress(struct wl_listener *listener, void *data)
 
 		/* Change focus if the button was _pressed_ over a client */
 		xytonode(cursor->x, cursor->y, &surface, &c, NULL, NULL, NULL);
-		if (c && (!client_is_unmanaged(c) || client_wants_focus(c)))
+		if (c)
 			focusclient(c, 1);
 
 		keyboard = wlr_seat_get_keyboard(seat);
@@ -85,7 +87,7 @@ buttonpress(struct wl_listener *listener, void *data)
 			cursor_mode = CurConsumed;
 			return;
 		}
-		if (event->button == BTN_LEFT && !surface && !c && ISCANVAS(selmon)) {
+		if (event->button == BTN_LEFT && !surface && !c && selmon) {
 			startpan(NULL);
 			return;
 		}
@@ -101,7 +103,7 @@ buttonpress(struct wl_listener *listener, void *data)
 			/* Drop the window off on its new monitor */
 			selmon = xytomon(cursor->x, cursor->y);
 			if (grabc)
-				setmon(grabc, selmon, 0);
+				setclientmonitor(grabc, selmon);
 			grabc = NULL;
 			if (settled)
 				clientsettle(settled);
@@ -271,8 +273,7 @@ cursorwarptohint(void)
 	if (c && active_constraint->current.cursor_hint.enabled) {
 		x = sx + c->geom.x + c->bw;
 		y = sy + c->geom.y + c->bw;
-		if (c->mon && ISCANVAS(c->mon) && !c->isfullscreen
-				&& !client_is_unmanaged(c))
+		if (c->mon && !c->isfullscreen)
 			canvaspointtoscreen(c->mon, x, y, &x, &y);
 		wlr_cursor_warp(cursor, NULL, x, y);
 		wlr_seat_pointer_warp(active_constraint->seat, sx, sy);
@@ -520,8 +521,7 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 		} else {
 			x = cursor->x;
 			y = cursor->y;
-			if (w->mon && ISCANVAS(w->mon) && !w->isfullscreen
-					&& !client_is_unmanaged(w))
+			if (w->mon && !w->isfullscreen)
 				canvaspointtoworld(w->mon, x, y, &x, &y);
 			sx = x - w->geom.x - w->bw;
 			sy = y - w->geom.y - w->bw;
@@ -534,8 +534,14 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 				relative_pointer_mgr, seat, (uint64_t)time * 1000,
 				dx, dy, dx_unaccel, dy_unaccel);
 
-		wl_list_for_each(constraint, &pointer_constraints->constraints, link)
+		constraint = wlr_pointer_constraints_v1_constraint_for_surface(
+				pointer_constraints, seat->pointer_state.focused_surface, seat);
+		if (constraint)
 			cursorconstrain(constraint);
+		else if (active_constraint) {
+			wlr_pointer_constraint_v1_send_deactivated(active_constraint);
+			active_constraint = NULL;
+		}
 
 		if (active_constraint && cursor_mode != CurResize && cursor_mode != CurMove
 				&& cursor_mode != CurPan) {
@@ -543,8 +549,7 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 			if (c && active_constraint->surface == seat->pointer_state.focused_surface) {
 				x = cursor->x;
 				y = cursor->y;
-				if (c->mon && ISCANVAS(c->mon) && !c->isfullscreen
-						&& !client_is_unmanaged(c))
+				if (c->mon && !c->isfullscreen)
 					canvaspointtoworld(c->mon, x, y, &x, &y);
 				sx = x - c->geom.x - c->bw;
 				sy = y - c->geom.y - c->bw;
@@ -629,11 +634,15 @@ moveresize(const Arg *arg)
 	if (cursor_mode != CurNormal && cursor_mode != CurPressed)
 		return;
 	xytonode(cursor->x, cursor->y, NULL, &grabc, NULL, NULL, NULL);
-	if (!grabc || client_is_unmanaged(grabc) || grabc->isfullscreen)
+	if (!grabc || grabc->isfullscreen)
 		return;
+	if (grabc->mon) {
+		grabc->mon->canvas_x_target = grabc->mon->canvas_x;
+		grabc->mon->canvas_y_target = grabc->mon->canvas_y;
+		grabc->mon->canvas_zoom_target = grabc->mon->canvas_zoom;
+	}
 
-	/* Float the window and tell motionnotify to grab it */
-	setfloating(grabc, 1);
+	/* Canvas clients are always positioned freely. */
 	canvaspointtoworld(grabc->mon, cursor->x, cursor->y, &x, &y);
 	switch (cursor_mode = arg->ui) {
 	case CurMove:
@@ -643,11 +652,9 @@ moveresize(const Arg *arg)
 		wlr_cursor_set_xcursor(cursor, cursor_mgr, "all-scroll");
 		break;
 	case CurResize:
-		/* Doesn't work for X11 output - the next absolute motion event
-		 * returns the cursor to where it started */
 		x = grabc->geom.x + grabc->geom.width;
 		y = grabc->geom.y + grabc->geom.height;
-		if (grabc->mon && ISCANVAS(grabc->mon))
+		if (grabc->mon)
 			canvaspointtoscreen(grabc->mon, x, y, &x, &y);
 		wlr_cursor_warp_closest(cursor, NULL, x, y);
 		wlr_cursor_set_xcursor(cursor, cursor_mgr, "se-resize");
@@ -666,10 +673,13 @@ startpan(const Arg *arg)
 	if (cursor_mode != CurNormal && cursor_mode != CurPressed)
 		return;
 	m = xytomon(cursor->x, cursor->y);
-	if (!ISCANVAS(m) || ((focused = focustop(m)) && focused->isfullscreen))
+	if (!m || ((focused = focustop(m)) && focused->isfullscreen))
 		return;
 	selmon = m;
 	grabc = NULL;
+	m->canvas_x_target = m->canvas_x;
+	m->canvas_y_target = m->canvas_y;
+	m->canvas_zoom_target = m->canvas_zoom;
 	cursor_mode = CurPan;
 	wlr_cursor_set_xcursor(cursor, cursor_mgr, "all-scroll");
 }
@@ -687,7 +697,7 @@ pinchbegin(struct wl_listener *listener, void *data)
 	xytonode(cursor->x, cursor->y, &surface, &c, NULL, NULL, NULL);
 	keyboard = wlr_seat_get_keyboard(seat);
 	mods = keyboard ? wlr_keyboard_get_modifiers(keyboard) : 0;
-	if (!locked && ISCANVAS(m)
+	if (!locked && m
 			&& !((focused = focustop(m)) && focused->isfullscreen)
 			&& (event->fingers == 3 || (!surface && !c)
 				|| (CLEANMASK(mods) & WLR_MODIFIER_LOGO))) {
@@ -695,6 +705,8 @@ pinchbegin(struct wl_listener *listener, void *data)
 		wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
 		pinchmon = m;
 		pinchzoom = m->canvas_zoom;
+		m->canvas_x_target = m->canvas_x;
+		m->canvas_y_target = m->canvas_y;
 		m->canvas_zoom_target = m->canvas_zoom;
 		return;
 	}
@@ -717,6 +729,8 @@ pinchupdate(struct wl_listener *listener, void *data)
 	zoom = canvas_clamp_zoom(config.zoom_min, config.zoom_max,
 			pinchzoom * event->scale);
 	setcanvaszoom(pinchmon, zoom);
+	pinchmon->canvas_x_target = pinchmon->canvas_x;
+	pinchmon->canvas_y_target = pinchmon->canvas_y;
 	pinchmon->canvas_zoom_target = pinchmon->canvas_zoom;
 	wlr_output_schedule_frame(pinchmon->wlr_output);
 }
@@ -758,8 +772,7 @@ pointerfocus(Client *c, struct wlr_surface *surface, double sx, double sy,
 	struct timespec now;
 
 	if (surface != seat->pointer_state.focused_surface &&
-			config.sloppyfocus && time && c && !c->iscollapsed
-			&& !client_is_unmanaged(c))
+			config.sloppyfocus && time && c && !c->iscollapsed)
 		focusclient(c, 0);
 
 	/* If surface is NULL, clear pointer focus */
@@ -847,6 +860,9 @@ xytonode(double x, double y, struct wlr_surface **psurface,
 	struct wlr_surface *surface = NULL;
 	Client *c = NULL;
 	LayerSurface *l = NULL;
+	struct {
+		unsigned int type;
+	} *owner;
 	int layer;
 
 	for (layer = NUM_LAYERS - 1; !surface && layer >= 0; layer--) {
@@ -859,13 +875,22 @@ xytonode(double x, double y, struct wlr_surface **psurface,
 			if (scene_surface)
 				surface = scene_surface->surface;
 		}
-		/* Walk the tree to find a node that knows the client */
-		for (pnode = node; pnode && !c; pnode = &pnode->parent->node)
-			c = pnode->data;
-		if (c && c->type == LayerShell) {
-			c = NULL;
-			l = pnode->data;
+		/* Scene owners are tagged at allocation and stored on their tree. */
+		for (pnode = node; pnode; pnode = pnode->parent
+				? &pnode->parent->node : NULL) {
+			if (!(owner = pnode->data))
+				continue;
+			if (owner->type == SceneClient) {
+				c = (Client *)owner;
+				break;
+			}
+			if (owner->type == SceneLayer) {
+				l = (LayerSurface *)owner;
+				break;
+			}
 		}
+		if (!c && !l && surface)
+			toplevel_from_wlr_surface(surface, &c, &l);
 		if (c || l)
 			break;
 	}

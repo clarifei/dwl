@@ -12,8 +12,8 @@
 .Op Fl s Ar command
 .Sh DESCRIPTION
 .Nm
-is a Wayland compositor based on wlroots and forked from dwl.
-It places windows on a continuous canvas that can be panned and zoomed instead
+is a Wayland compositor based on wlroots. It places windows on a continuous
+canvas that can be panned and zoomed instead
 of using a traditional tiling layout.
 .Pp
 Window placement, input, effects, monitor rules, and bindings are configured at
@@ -77,6 +77,8 @@ Collapse or restore the active window in place.
 Close the active window.
 .It Super-f
 Toggle fullscreen.
+.It Super-Shift-less , Super-Shift-greater
+Move the active window to the monitor on the left or right.
 .It Super-Button1
 Move a window.
 .It Super-Button2
@@ -104,4 +106,5 @@ Backend and renderer settings understood by wlroots.
 .El
 .Sh AUTHORS
 .An Inca! contributors
-Inca! is based on dwl and retains its original contributors and license.
+Inca! retains the original contributor attributions and licenses of its
+upstream components.

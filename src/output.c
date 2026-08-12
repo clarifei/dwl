@@ -1,6 +1,8 @@
 /* See LICENSE file for copyright and license details. */
 /* Output lifecycle, layer shell, rendering, and status reporting. */
 
+#include "inca.h"
+
 void
 arrangelayer(Monitor *m, struct wl_list *list, struct wlr_box *usable_area, int exclusive)
 {
@@ -110,11 +112,8 @@ closemon(Monitor *m)
 	}
 
 	wl_list_for_each(c, &clients, link) {
-		if (c->isfloating && c->geom.x > m->m.width)
-			resize(c, (struct wlr_box){.x = c->geom.x - m->w.width, .y = c->geom.y,
-					.width = c->geom.width, .height = c->geom.height}, 0);
 		if (c->mon == m)
-			setmon(c, selmon, c->tags);
+			setclientmonitor(c, selmon);
 	}
 	focusclient(focustop(selmon), 1);
 	printstatus();
@@ -172,7 +171,7 @@ createlayersurface(struct wl_listener *listener, void *data)
 	}
 
 	l = layer_surface->data = ecalloc(1, sizeof(*l));
-	l->type = LayerShell;
+	l->type = SceneLayer;
 	wl_list_init(&l->effect_rects);
 	LISTEN(&surface->events.unmap, &l->unmap, unmaplayersurfacenotify);
 	LISTEN(&layer_surface->events.destroy, &l->destroy, destroylayersurfacenotify);
@@ -230,23 +229,13 @@ createmon(struct wl_listener *listener, void *data)
 		wl_list_init(&m->layers[i]);
 
 	wlr_output_state_init(&state);
-	/* Initialize monitor state using configured rules */
-	m->tagset[0] = m->tagset[1] = 1;
-	for (r = config.monrules; r < config.monrules + config.monrule_count; r++) {
-		if (!r->name || strstr(wlr_output->name, r->name)) {
-			m->m.x = r->x;
-			m->m.y = r->y;
-			m->mfact = r->mfact;
-			m->nmaster = r->nmaster;
-			m->lt[0] = r->lt;
-			m->lt[1] = &config.layouts[config.layout_count > 1
-					&& r->lt != &config.layouts[1]];
-			strncpy(m->ltsymbol, m->lt[m->sellt]->symbol, LENGTH(m->ltsymbol));
-			wlr_output_state_set_scale(&state, r->scale);
-			wlr_output_state_set_transform(&state, r->rr);
-			break;
-		}
-	}
+	r = config_monitor_rule(&config, wlr_output->name);
+	if (!r)
+		die("no monitor rule for %s", wlr_output->name);
+	m->m.x = r->x;
+	m->m.y = r->y;
+	wlr_output_state_set_scale(&state, r->scale);
+	wlr_output_state_set_transform(&state, r->rr);
 
 	/* Use the fastest mode at the largest advertised resolution. */
 	if ((mode = bestoutputmode(wlr_output)))
@@ -273,7 +262,8 @@ createmon(struct wl_listener *listener, void *data)
 	 *
 	 */
 	/* updatemons() will resize and set correct position */
-	m->fullscreen_bg = wlr_scene_rect_create(layers[LyrFS], 0, 0, config.fullscreen_bg);
+	m->fullscreen_bg = wlr_scene_rect_create(layers[LyrFullscreen], 0, 0,
+			config.fullscreen_bg);
 	wlr_scene_node_set_enabled(&m->fullscreen_bg->node, 0);
 
 	/* Adds this to the output layout in the order it was configured.
@@ -388,7 +378,6 @@ apply_or_test:
 		wlr_output_configuration_v1_send_failed(output_config);
 	wlr_output_configuration_v1_destroy(output_config);
 
-	/* https://codeberg.org/dwl/dwl/issues/577 */
 	updatemons(NULL, NULL);
 }
 
@@ -404,35 +393,22 @@ printstatus(void)
 {
 	Monitor *m = NULL;
 	Client *c;
-	uint32_t occ, urg, sel;
 
 	wl_list_for_each(m, &mons, link) {
-		occ = urg = 0;
-		wl_list_for_each(c, &clients, link) {
-			if (c->mon != m)
-				continue;
-			occ |= c->tags;
-			if (c->isurgent)
-				urg |= c->tags;
-		}
 		if ((c = focustop(m))) {
 			printf("%s title %s\n", m->wlr_output->name, client_get_title(c));
 			printf("%s appid %s\n", m->wlr_output->name, client_get_appid(c));
 			printf("%s fullscreen %d\n", m->wlr_output->name, c->isfullscreen);
-			printf("%s floating %d\n", m->wlr_output->name, c->isfloating);
-			sel = c->tags;
+			printf("%s collapsed %d\n", m->wlr_output->name, c->iscollapsed);
 		} else {
 			printf("%s title \n", m->wlr_output->name);
 			printf("%s appid \n", m->wlr_output->name);
 			printf("%s fullscreen \n", m->wlr_output->name);
-			printf("%s floating \n", m->wlr_output->name);
-			sel = 0;
+			printf("%s collapsed \n", m->wlr_output->name);
 		}
 
 		printf("%s selmon %u\n", m->wlr_output->name, m == selmon);
-		printf("%s tags %"PRIu32" %"PRIu32" %"PRIu32" %"PRIu32"\n",
-			m->wlr_output->name, occ, m->tagset[m->seltags], sel, urg);
-		printf("%s layout %s\n", m->wlr_output->name, m->ltsymbol);
+		printf("%s workspace canvas\n", m->wlr_output->name);
 	}
 	fflush(stdout);
 }
@@ -461,31 +437,20 @@ rendermon(struct wl_listener *listener, void *data)
 	/* This function is called every time an output is ready to display a frame,
 	 * generally at the output's refresh rate (e.g. 60Hz). */
 	Monitor *m = wl_container_of(listener, m, frame);
-	Client *c;
-	struct wlr_output_state pending = {0};
 	struct timespec now;
 	int animating;
 
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	animating = tickcanvaszoom(m, &now);
+	animating |= tickcanvascamera(m, &now);
 	animating |= tickcanvasedgepan(m, &now);
-
-	/* Render if no XDG clients have an outstanding resize and are visible on
-	 * this monitor. */
-	wl_list_for_each(c, &clients, link) {
-		if (c->resize && !ISCANVAS(m) && !c->isfloating
-				&& client_is_rendered_on_mon(c, m) && !client_is_stopped(c))
-			goto skip;
-	}
 
 	wlr_scene_output_commit(m->scene_output, NULL);
 
-skip:
 	/* Let clients know a frame has been rendered */
 	wlr_scene_output_send_frame_done(m->scene_output, &now);
 	if (animating)
 		wlr_output_schedule_frame(m->wlr_output);
-	wlr_output_state_finish(&pending);
 }
 
 void
@@ -598,7 +563,7 @@ updatemons(struct wl_listener *listener, void *data)
 	if (selmon && selmon->wlr_output->enabled) {
 		wl_list_for_each(c, &clients, link) {
 			if (!c->mon && client_surface(c)->mapped)
-				setmon(c, selmon, c->tags);
+				setclientmonitor(c, selmon);
 		}
 		focusclient(focustop(selmon), 1);
 		if (selmon->lock_surface) {

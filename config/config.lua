@@ -57,19 +57,12 @@ return {
     collapsed_detail_color = "#b8b8b8ff",
   },
 
-  tagcount = 1,
-
   logging = "error", -- silent, error, info, debug
-
-  layouts = {
-    { name = "canvas", symbol = "[ ]", arrange = "canvas" },
-  },
 
   rules = {},
 
   monitors = {
-    { name = nil, mfact = 0.55, nmaster = 1, scale = 1,
-      layout = "canvas", transform = "normal", x = -1, y = -1 },
+    { name = nil, scale = 1, transform = "normal", x = -1, y = -1 },
   },
 
   keyboard = {
@@ -114,8 +107,8 @@ return {
     { mods = {"SUPER"}, key = "m", action = "togglecollapse" },
     { mods = {"SUPER"}, key = "comma", action = "focusmon", value = "left" },
     { mods = {"SUPER"}, key = "period", action = "focusmon", value = "right" },
-    { mods = {"SUPER", "SHIFT"}, key = "less", action = "tagmon", value = "left" },
-    { mods = {"SUPER", "SHIFT"}, key = "greater", action = "tagmon", value = "right" },
+    { mods = {"SUPER", "SHIFT"}, key = "less", action = "sendtomonitor", value = "left" },
+    { mods = {"SUPER", "SHIFT"}, key = "greater", action = "sendtomonitor", value = "right" },
     { mods = {"SUPER", "SHIFT"}, key = "q", action = "quit" },
     { mods = {"CTRL", "ALT"}, key = "XF86Switch_VT_1", action = "chvt", value = 1 },
     { mods = {"CTRL", "ALT"}, key = "XF86Switch_VT_2", action = "chvt", value = 2 },

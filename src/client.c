@@ -1,6 +1,8 @@
 /* See LICENSE file for copyright and license details. */
 /* Client lifecycle, focus, rules, geometry, and decoration handling. */
 
+#include "inca.h"
+
 typedef struct {
 	struct wl_listener commit;
 	struct wl_listener destroy;
@@ -116,7 +118,7 @@ clienteffectsupdate(Client *c)
 	double scale;
 	int enabled;
 
-	if (!c || !c->scene || client_is_unmanaged(c))
+	if (!c || !c->scene)
 		return;
 	if (!c->effect_buffer) {
 		lookup = (ClientEffectLookup){.client = c};
@@ -231,7 +233,8 @@ clientcollapsedupdate(Client *c, int redraw)
 {
 	struct wlr_buffer *buffer;
 	float scrim[4];
-	int width, height, label_width, label_height, x, y;
+	enum corner_location corners;
+	int width, height, label_width, label_height, radius, x, y;
 
 	if (!c || !c->scene || !c->scene_surface)
 		return;
@@ -257,8 +260,19 @@ clientcollapsedupdate(Client *c, int redraw)
 	scrim[3] = config.collapsed_scrim[3];
 	width = MAX(1, c->geom.width - 2 * (int)c->bw);
 	height = MAX(1, c->geom.height - 2 * (int)c->bw);
+	radius = c->isfullscreen ? 0 : MIN(config.corner_radius,
+			MIN(width, height) / 2);
+	corners = radius ? CORNER_LOCATION_ALL : CORNER_LOCATION_NONE;
 	wlr_scene_rect_set_size(c->collapsed_scrim, width, height);
 	wlr_scene_rect_set_color(c->collapsed_scrim, scrim);
+	wlr_scene_rect_set_corner_radius(c->collapsed_scrim, radius, corners);
+	wlr_scene_rect_set_clipped_region(c->collapsed_scrim, (struct clipped_region){
+		.area = {0, 0, width, height},
+		.corner_radius = radius,
+		.corners = corners,
+	});
+	wlr_scene_rect_set_backdrop_blur(c->collapsed_scrim, config.blur_enabled);
+	wlr_scene_rect_set_backdrop_blur_optimized(c->collapsed_scrim, false);
 	wlr_scene_node_set_position(&c->collapsed_scrim->node, c->bw, c->bw);
 	label_width = MIN(width, 640);
 	label_height = MIN(height, 2 * config.collapsed_font_size + 24);
@@ -315,9 +329,7 @@ applybounds(Client *c, struct wlr_box *bbox)
 void
 applyrules(Client *c)
 {
-	/* rule matching */
 	const char *appid, *title;
-	uint32_t newtags = 0;
 	int i;
 	const Rule *r;
 	Monitor *mon = selmon, *m;
@@ -327,9 +339,7 @@ applyrules(Client *c)
 
 	for (r = config.rules; r < config.rules + config.rule_count; r++) {
 		if ((!r->title || strstr(title, r->title))
-				&& (!r->id || strstr(appid, r->id))) {
-			c->isfloating = r->isfloating;
-			newtags |= r->tags;
+				&& (!r->app_id || strstr(appid, r->app_id))) {
 			i = 0;
 			wl_list_for_each(m, &mons, link) {
 				if (r->monitor == i++)
@@ -338,8 +348,7 @@ applyrules(Client *c)
 		}
 	}
 
-	c->isfloating |= client_is_float_type(c);
-	setmon(c, mon, newtags);
+	setclientmonitor(c, mon);
 }
 
 void
@@ -347,7 +356,7 @@ commitnotify(struct wl_listener *listener, void *data)
 {
 	Client *c = wl_container_of(listener, c, commit);
 
-	if (c->surface.xdg->initial_commit) {
+	if (c->surface->initial_commit) {
 		/*
 		 * Get the monitor this client will be rendered on
 		 * Note that if the user set a rule in which the client is placed on
@@ -358,20 +367,20 @@ commitnotify(struct wl_listener *listener, void *data)
 		if (c->mon) {
 			client_set_scale(client_surface(c), c->mon->wlr_output->scale);
 		}
-		setmon(c, NULL, 0); /* Make sure to reapply rules in mapnotify() */
+		setclientmonitor(c, NULL); /* Reapply rules after the surface maps. */
 
-		wlr_xdg_toplevel_set_wm_capabilities(c->surface.xdg->toplevel,
+		wlr_xdg_toplevel_set_wm_capabilities(c->surface->toplevel,
 				WLR_XDG_TOPLEVEL_WM_CAPABILITIES_FULLSCREEN);
 		if (c->decoration)
 			requestdecorationmode(&c->set_decoration_mode, c->decoration);
-		wlr_xdg_toplevel_set_size(c->surface.xdg->toplevel, 0, 0);
+		wlr_xdg_toplevel_set_size(c->surface->toplevel, 0, 0);
 		return;
 	}
 
-	resize(c, c->geom, (c->isfloating && !c->isfullscreen));
+	resize(c, c->geom, !c->isfullscreen);
 
 	/* mark a pending resize as completed */
-	if (c->resize && c->resize <= c->surface.xdg->current.configure_serial)
+	if (c->resize && c->resize <= c->surface->current.configure_serial)
 		c->resize = 0;
 }
 
@@ -398,12 +407,12 @@ commitpopup(struct wl_listener *listener, void *data)
 		wlr_xdg_popup_destroy(popup);
 		return;
 	}
-	if (c && ISCANVAS(c->mon) && !c->isfullscreen)
+	if (c && !c->isfullscreen)
 		canvasvisiblebox(c->mon, &box);
 	else
-		box = type == LayerShell ? l->mon->m : c->mon->w;
-	box.x -= (type == LayerShell ? l->scene->node.x : c->geom.x);
-	box.y -= (type == LayerShell ? l->scene->node.y : c->geom.y);
+		box = type == SceneLayer ? l->mon->m : c->mon->w;
+	box.x -= type == SceneLayer ? l->scene->node.x : c->geom.x;
+	box.y -= type == SceneLayer ? l->scene->node.y : c->geom.y;
 	wlr_xdg_popup_unconstrain_from_box(popup, &box);
 	if (c)
 		clientsceneupdate(c);
@@ -432,7 +441,8 @@ createnotify(struct wl_listener *listener, void *data)
 
 	/* Allocate a Client for this surface */
 	c = toplevel->base->data = ecalloc(1, sizeof(*c));
-	c->surface.xdg = toplevel->base;
+	c->type = SceneClient;
+	c->surface = toplevel->base;
 	c->bw = config.borderpx;
 
 	LISTEN(&toplevel->base->surface->events.commit, &c->commit, commitnotify);
@@ -473,21 +483,10 @@ destroynotify(struct wl_listener *listener, void *data)
 	wl_list_remove(&c->destroy.link);
 	wl_list_remove(&c->set_title.link);
 	wl_list_remove(&c->fullscreen.link);
-#ifdef XWAYLAND
-	if (c->type != XDGShell) {
-		wl_list_remove(&c->activate.link);
-		wl_list_remove(&c->associate.link);
-		wl_list_remove(&c->configure.link);
-		wl_list_remove(&c->dissociate.link);
-		wl_list_remove(&c->set_hints.link);
-	} else
-#endif
-	{
-		wl_list_remove(&c->commit.link);
-		wl_list_remove(&c->map.link);
-		wl_list_remove(&c->unmap.link);
-		wl_list_remove(&c->maximize.link);
-	}
+	wl_list_remove(&c->commit.link);
+	wl_list_remove(&c->map.link);
+	wl_list_remove(&c->unmap.link);
+	wl_list_remove(&c->maximize.link);
 	free(c);
 }
 
@@ -501,6 +500,10 @@ focusclient(Client *c, int lift)
 
 	if (locked)
 		return;
+	/* A collapsed window remains clickable in the scene, but it is never a
+	 * keyboard-focus target. */
+	if (c && c->iscollapsed)
+		c = focustop(c->mon);
 
 	/* Raise client in stacking order if requested */
 	if (c && lift)
@@ -509,14 +512,14 @@ focusclient(Client *c, int lift)
 	if (c && client_surface(c) == old)
 		return;
 
-	if ((old_client_type = toplevel_from_wlr_surface(old, &old_c, &old_l)) == XDGShell) {
+	if ((old_client_type = toplevel_from_wlr_surface(old, &old_c, &old_l)) == SceneClient) {
 		struct wlr_xdg_popup *popup, *tmp;
-		wl_list_for_each_safe(popup, tmp, &old_c->surface.xdg->popups, link)
+		wl_list_for_each_safe(popup, tmp, &old_c->surface->popups, link)
 			wlr_xdg_popup_destroy(popup);
 	}
 
 	/* Put the new client atop the focus stack and select its monitor */
-	if (c && !client_is_unmanaged(c)) {
+	if (c) {
 		wl_list_remove(&c->flink);
 		wl_list_insert(&fstack, &c->flink);
 		selmon = c->mon;
@@ -535,15 +538,11 @@ focusclient(Client *c, int lift)
 		/* If an overlay is focused, don't focus or activate the client,
 		 * but only update its position in fstack to render its border with focuscolor
 		 * and focus it after the overlay is closed. */
-		if (old_client_type == LayerShell && wlr_scene_node_coords(
+		if (old_client_type == SceneLayer && wlr_scene_node_coords(
 					&old_l->scene->node, &unused_lx, &unused_ly)
 				&& old_l->layer_surface->current.layer >= ZWLR_LAYER_SHELL_V1_LAYER_TOP) {
 			return;
-		} else if (old_c && old_c == exclusive_focus && client_wants_focus(old_c)) {
-			return;
-		/* Don't deactivate old client if the new one wants focus, as this causes issues with winecfg
-		 * and probably other clients */
-		} else if (old_c && !client_is_unmanaged(old_c) && (!c || !client_wants_focus(c))) {
+		} else if (old_c) {
 			client_set_border_color(old_c, config.bordercolor);
 			clienteffectsupdate(old_c);
 
@@ -577,8 +576,10 @@ Client *
 focustop(Monitor *m)
 {
 	Client *c;
+	if (!m)
+		return NULL;
 	wl_list_for_each(c, &fstack, flink) {
-		if (VISIBLEON(c, m))
+		if (CLIENTON(c, m) && !c->iscollapsed)
 			return c;
 	}
 	return NULL;
@@ -605,39 +606,24 @@ mapnotify(struct wl_listener *listener, void *data)
 	/* Called when the surface is mapped, or ready to display on-screen. */
 	Client *p = NULL;
 	Client *w, *c = wl_container_of(listener, c, map);
+	CanvasBox spawn;
 	Monitor *m;
 	double world_x, world_y;
+	int spawn_step;
 
 	/* Create scene tree for this client and its border */
-	c->scene = client_surface(c)->data = wlr_scene_tree_create(layers[LyrTile]);
-	/* Enabled later by a call to arrange() */
-	wlr_scene_node_set_enabled(&c->scene->node, client_is_unmanaged(c));
-	c->scene_surface = c->type == XDGShell
-			? wlr_scene_xdg_surface_create(c->scene, c->surface.xdg)
-			: wlr_scene_subsurface_tree_create(c->scene, client_surface(c));
+	c->scene = client_surface(c)->data = wlr_scene_tree_create(layers[LyrClients]);
+	wlr_scene_node_set_enabled(&c->scene->node, 0);
+	c->scene_surface = wlr_scene_xdg_surface_create(c->scene, c->surface);
 	c->scene->node.data = c->scene_surface->node.data = c;
 
 	client_get_geometry(c, &c->geom);
-
-	/* Handle unmanaged clients first so we can return prior create borders */
-	if (client_is_unmanaged(c)) {
-		/* Unmanaged clients always are floating */
-		wlr_scene_node_reparent(&c->scene->node, layers[LyrFloat]);
-		wlr_scene_node_set_position(&c->scene->node, c->geom.x, c->geom.y);
-		client_set_size(c, c->geom.width, c->geom.height);
-		if (client_wants_focus(c)) {
-			focusclient(c, 1);
-			exclusive_focus = c;
-		}
-		goto unset_fullscreen;
-	}
 
 	c->border = wlr_scene_rect_create(c->scene, 0, 0,
 			c->isurgent ? config.urgentcolor : config.bordercolor);
 	c->border->node.data = c;
 	wlr_scene_node_lower_to_bottom(&c->border->node);
-	/* Initialize client geometry with room for border */
-	client_set_tiled(c, WLR_EDGE_TOP | WLR_EDGE_BOTTOM | WLR_EDGE_LEFT | WLR_EDGE_RIGHT);
+	/* Reserve room for the compositor border. */
 	c->geom.width += 2 * c->bw;
 	c->geom.height += 2 * c->bw;
 
@@ -645,37 +631,38 @@ mapnotify(struct wl_listener *listener, void *data)
 	wl_list_insert(&clients, &c->link);
 	wl_list_insert(&fstack, &c->flink);
 
-	/* Set initial monitor, tags, floating status, and focus:
-	 * we always consider floating, clients that have parent and thus
-	 * we set the same tags and monitor as its parent.
-	 * If there is no parent, apply rules */
+	/* Child toplevels inherit their parent's canvas; roots use configured rules. */
 	if ((p = client_get_parent(c))) {
-		c->isfloating = 1;
-		setmon(c, p->mon, p->tags);
+		setclientmonitor(c, p->mon);
 	} else {
 		applyrules(c);
 	}
-	if (!p && ISCANVAS(c->mon)) {
+	if (!p && c->mon) {
 		canvaspointtoworld(c->mon,
 				c->mon->w.x + c->mon->w.width / 2.0,
 				c->mon->w.y + c->mon->w.height / 2.0,
 				&world_x, &world_y);
-		resize(c, (struct wlr_box){
+		spawn_step = MIN(160, MAX(48,
+				MIN(c->geom.width, c->geom.height) / 8));
+		spawn = canvas_spawn_box((CanvasBox){
 			.x = (int)round(world_x - c->geom.width / 2.0),
 			.y = (int)round(world_y - c->geom.height / 2.0),
 			.width = c->geom.width,
 			.height = c->geom.height,
-		}, 1);
+		}, c->mon->spawn_serial++, spawn_step);
+		resize(c, (struct wlr_box){spawn.x, spawn.y, spawn.width, spawn.height}, 1);
 		clientsettle(c);
 	}
+	if (c->mon)
+		arrange(c->mon);
+	focusclient(c, 1);
 	centercanvas(NULL);
 	clienteffectsupdate(c);
 	printstatus();
 
-unset_fullscreen:
 	m = c->mon ? c->mon : xytomon(c->geom.x, c->geom.y);
 	wl_list_for_each(w, &clients, link) {
-		if (w != c && w != p && w->isfullscreen && m == w->mon && (w->tags & c->tags))
+		if (w != c && w != p && w->isfullscreen && m == w->mon)
 			setfullscreen(w, 0);
 	}
 }
@@ -692,17 +679,17 @@ maximizenotify(struct wl_listener *listener, void *data)
 	 * protocol version
 	 * wlr_xdg_surface_schedule_configure() is used to send an empty reply. */
 	Client *c = wl_container_of(listener, c, maximize);
-	if (c->surface.xdg->initialized
-			&& wl_resource_get_version(c->surface.xdg->toplevel->resource)
+	if (c->surface->initialized
+			&& wl_resource_get_version(c->surface->toplevel->resource)
 					< XDG_TOPLEVEL_WM_CAPABILITIES_SINCE_VERSION)
-		wlr_xdg_surface_schedule_configure(c->surface.xdg);
+		wlr_xdg_surface_schedule_configure(c->surface);
 }
 
 void
 requestdecorationmode(struct wl_listener *listener, void *data)
 {
 	Client *c = wl_container_of(listener, c, set_decoration_mode);
-	if (c->surface.xdg->initialized)
+	if (c->surface->initialized)
 		wlr_xdg_toplevel_decoration_v1_set_mode(c->decoration,
 				WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
 }
@@ -720,7 +707,7 @@ resize(Client *c, struct wlr_box geo, int interact)
 
 	client_set_bounds(c, geo.width, geo.height);
 	c->geom = geo;
-	if (!ISCANVAS(c->mon) || c->isfullscreen)
+	if (c->isfullscreen)
 		applybounds(c, bbox);
 
 	/* Update scene-graph, including borders */
@@ -737,21 +724,6 @@ resize(Client *c, struct wlr_box geo, int interact)
 }
 
 void
-setfloating(Client *c, int floating)
-{
-	Client *p = client_get_parent(c);
-	c->isfloating = floating;
-	/* If in floating layout do not change the client's layer */
-	if (!c->mon || !client_surface(c)->mapped || !c->mon->lt[c->mon->sellt]->arrange)
-		return;
-	wlr_scene_node_reparent(&c->scene->node, layers[c->isfullscreen ||
-			(p && p->isfullscreen) ? LyrFS
-			: c->isfloating ? LyrFloat : LyrTile]);
-	arrange(c->mon);
-	printstatus();
-}
-
-void
 setfullscreen(Client *c, int fullscreen)
 {
 	if (fullscreen && c->iscollapsed) {
@@ -764,15 +736,14 @@ setfullscreen(Client *c, int fullscreen)
 		return;
 	c->bw = fullscreen ? 0 : config.borderpx;
 	client_set_fullscreen(c, fullscreen);
-	wlr_scene_node_reparent(&c->scene->node, layers[c->isfullscreen
-			? LyrFS : c->isfloating ? LyrFloat : LyrTile]);
+	wlr_scene_node_reparent(&c->scene->node,
+			layers[c->isfullscreen ? LyrFullscreen : LyrClients]);
 
 	if (fullscreen) {
 		c->prev = c->geom;
 		resize(c, c->mon->m, 0);
 	} else {
-		/* restore previous size instead of arrange for floating windows since
-		 * client positions are set by the user and cannot be recalculated */
+		/* Restore the canvas position and size selected by the user. */
 		resize(c, c->prev, 0);
 	}
 	arrange(c->mon);
@@ -782,18 +753,25 @@ setfullscreen(Client *c, int fullscreen)
 void
 setcollapsed(Client *c, int collapsed)
 {
-	if (!c || c->isfullscreen || client_is_unmanaged(c))
+	Client *next;
+	int was_focused;
+
+	if (!c || c->isfullscreen)
 		return;
+	was_focused = c->mon && focustop(c->mon) == c;
 	c->iscollapsed = collapsed;
 	clientcollapsedupdate(c, 1);
 	client_set_suspended(c, c->iscollapsed);
 	clientsceneupdate(c);
 	if (c->iscollapsed) {
 		client_activate_surface(client_surface(c), 0);
-		wlr_seat_keyboard_notify_clear_focus(seat);
-		motionnotify(0, NULL, 0, 0, 0, 0);
+		next = was_focused ? focustop(c->mon) : NULL;
+		focusclient(next, 1);
+		if (next)
+			centercanvas(NULL);
 	} else {
 		focusclient(c, 1);
+		centercanvas(NULL);
 	}
 	printstatus();
 }
@@ -808,24 +786,29 @@ togglecollapse(const Arg *arg)
 }
 
 void
-setmon(Client *c, Monitor *m, uint32_t newtags)
+setclientmonitor(Client *c, Monitor *m)
 {
 	Monitor *oldmon = c->mon;
+	double screen_x, screen_y, world_x, world_y;
 
 	if (oldmon == m)
 		return;
+	if (oldmon && m && !c->isfullscreen) {
+		canvaspointtoscreen(oldmon, c->geom.x, c->geom.y,
+				&screen_x, &screen_y);
+		canvaspointtoworld(m, screen_x - oldmon->m.x + m->m.x,
+				screen_y - oldmon->m.y + m->m.y, &world_x, &world_y);
+		c->geom.x = (int)round(world_x);
+		c->geom.y = (int)round(world_y);
+	}
 	c->mon = m;
-	c->prev = c->geom;
 
 	/* Scene graph sends surface leave/enter events on move and resize */
 	if (oldmon)
 		arrange(oldmon);
 	if (m) {
-		/* Make sure window actually overlaps with the monitor */
-		resize(c, c->geom, 0);
-		c->tags = newtags ? newtags : m->tagset[m->seltags]; /* assign tags of target monitor */
-		setfullscreen(c, c->isfullscreen); /* This will call arrange(c->mon) */
-		setfloating(c, c->isfloating);
+		client_set_scale(client_surface(c), m->wlr_output->scale);
+		resize(c, c->isfullscreen ? m->m : c->geom, 0);
 	}
 	focusclient(focustop(selmon), 1);
 }
@@ -835,25 +818,22 @@ unmapnotify(struct wl_listener *listener, void *data)
 {
 	/* Called when the surface is unmapped, and should no longer be shown. */
 	Client *c = wl_container_of(listener, c, unmap);
-	int was_focused = c->mon && focustop(c->mon) == c;
+	Client *next;
+	Monitor *mon = c->mon;
+	int was_focused = mon && focustop(mon) == c;
 	if (c == grabc) {
 		cursor_mode = CurNormal;
 		grabc = NULL;
 	}
 
-	if (client_is_unmanaged(c)) {
-		if (c == exclusive_focus) {
-			exclusive_focus = NULL;
-			focusclient(focustop(selmon), 1);
-		}
-	} else {
-		wl_list_remove(&c->link);
-		setmon(c, NULL, 0);
-		wl_list_remove(&c->flink);
-	}
+	wl_list_remove(&c->link);
+	setclientmonitor(c, NULL);
+	wl_list_remove(&c->flink);
 	if (was_focused) {
-		focusclient(focustop(selmon), 1);
-		centercanvas(NULL);
+		next = focustop(mon);
+		focusclient(next, 1);
+		if (next)
+			centercanvas(NULL);
 	}
 
 	wlr_scene_node_destroy(&c->scene->node);

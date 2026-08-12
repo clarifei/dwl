@@ -1,4 +1,4 @@
-/* See LICENSE.dwm file for copyright and license details. */
+/* Shared allocation and file-descriptor helpers. */
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
