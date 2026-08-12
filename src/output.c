@@ -438,12 +438,28 @@ rendermon(struct wl_listener *listener, void *data)
 	 * generally at the output's refresh rate (e.g. 60Hz). */
 	Monitor *m = wl_container_of(listener, m, frame);
 	struct timespec now;
-	int animating;
+	int animating, zooming;
+	double old_zoom, old_x, old_y;
+	int transform_changed, rescale;
 
 	clock_gettime(CLOCK_MONOTONIC, &now);
+	old_zoom = m->canvas_zoom;
+	old_x = m->canvas_x;
+	old_y = m->canvas_y;
 	animating = tickcanvaszoom(m, &now);
-	animating |= tickcanvascamera(m, &now);
+	zooming = fabs(m->canvas_zoom_target - m->canvas_zoom)
+			>= CANVAS_ZOOM_EPSILON;
+	if (!zooming)
+		animating |= tickcanvascamera(m, &now);
 	animating |= tickcanvasedgepan(m, &now);
+	transform_changed = m->canvas_dirty || old_zoom != m->canvas_zoom
+			|| old_x != m->canvas_x || old_y != m->canvas_y;
+	rescale = old_zoom != m->canvas_zoom;
+	if (transform_changed) {
+		updatecanvas(m, rescale);
+		motionnotify(0, NULL, 0, 0, 0, 0);
+		m->canvas_dirty = 0;
+	}
 
 	wlr_scene_output_commit(m->scene_output, NULL);
 

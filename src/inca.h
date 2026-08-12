@@ -205,6 +205,7 @@ struct Monitor {
 	double canvas_x, canvas_y; /* screen-space translation */
 	double canvas_x_target, canvas_y_target;
 	double canvas_zoom, canvas_zoom_target;
+	int canvas_dirty;
 	struct timespec canvas_camera_frame;
 	struct timespec canvas_zoom_frame;
 	struct timespec canvas_pan_frame;

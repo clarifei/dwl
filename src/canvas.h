@@ -23,6 +23,18 @@ canvas_clamp_coordinate(long long coordinate)
 			: coordinate > INT_MAX ? INT_MAX : (int)coordinate;
 }
 
+static inline int
+canvas_round_coordinate(double coordinate)
+{
+	if (!isfinite(coordinate))
+		return 0;
+	if (coordinate <= (double)INT_MIN)
+		return INT_MIN;
+	if (coordinate >= (double)INT_MAX)
+		return INT_MAX;
+	return (int)llround(coordinate);
+}
+
 
 static inline struct wl_list *
 canvas_cycle_link(struct wl_list *head, struct wl_list *link, int forward)

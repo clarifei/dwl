@@ -33,9 +33,12 @@ canvasnodebufferupdate(CanvasNodeState *state, int committed)
 			state->width, state->scale);
 	state->scaled_height = canvas_scaled_extent(state->y,
 			state->height, state->scale);
-	wlr_scene_buffer_set_dest_size(buffer,
-			state->scaled_width, state->scaled_height);
-	wlr_scene_buffer_set_filter_mode(buffer, WLR_SCALE_FILTER_BILINEAR);
+	if (buffer->dst_width != state->scaled_width
+			|| buffer->dst_height != state->scaled_height)
+		wlr_scene_buffer_set_dest_size(buffer,
+				state->scaled_width, state->scaled_height);
+	if (buffer->filter_mode != WLR_SCALE_FILTER_BILINEAR)
+		wlr_scene_buffer_set_filter_mode(buffer, WLR_SCALE_FILTER_BILINEAR);
 }
 
 static struct clipped_region
@@ -66,7 +69,8 @@ canvasnodepositionupdate(struct wlr_scene_node *node, CanvasNodeState *state)
 	y = (int)round(state->y * state->scale);
 	state->scaled_x = x;
 	state->scaled_y = y;
-	wlr_scene_node_set_position(node, x, y);
+	if (node->x != x || node->y != y)
+		wlr_scene_node_set_position(node, x, y);
 }
 
 static void
@@ -209,11 +213,17 @@ canvasnodescale(struct wlr_scene_node *node, double scale)
 		state->scaled_corner_radius = (int)round(state->corner_radius * scale);
 		state->scaled_clipped_region = canvasclippedregionscale(
 				&state->clipped_region, scale);
-		wlr_scene_rect_set_size(rect,
-				state->scaled_width, state->scaled_height);
-		wlr_scene_rect_set_corner_radius(rect, state->scaled_corner_radius,
-				rect->corners);
-		wlr_scene_rect_set_clipped_region(rect, state->scaled_clipped_region);
+		if (rect->width != state->scaled_width
+				|| rect->height != state->scaled_height)
+			wlr_scene_rect_set_size(rect,
+					state->scaled_width, state->scaled_height);
+		if (rect->corner_radius != state->scaled_corner_radius)
+			wlr_scene_rect_set_corner_radius(rect,
+					state->scaled_corner_radius, rect->corners);
+		if (memcmp(&rect->clipped_region, &state->scaled_clipped_region,
+				sizeof(rect->clipped_region)))
+			wlr_scene_rect_set_clipped_region(rect,
+					state->scaled_clipped_region);
 	} else if (node->type == WLR_SCENE_NODE_BUFFER) {
 		canvasnodebufferupdate(state, 0);
 	} else {
@@ -292,6 +302,7 @@ void
 clientsceneposition(Client *c)
 {
 	double x, y;
+	int sx, sy;
 
 	if (!c || !c->scene)
 		return;
@@ -301,8 +312,10 @@ clientsceneposition(Client *c)
 		x = c->geom.x;
 		y = c->geom.y;
 	}
-	wlr_scene_node_set_position(&c->scene->node,
-			(int)round(x), (int)round(y));
+	sx = (int)round(x);
+	sy = (int)round(y);
+	if (c->scene->node.x != sx || c->scene->node.y != sy)
+		wlr_scene_node_set_position(&c->scene->node, sx, sy);
 }
 
 void
@@ -383,11 +396,11 @@ clientsettle(Client *c)
 	wl_list_for_each(other, &clients, link)
 		if (other != c && other->mon == c->mon && !other->iscollapsed
 				&& !other->isfullscreen) {
-			count++;
 			overlap |= canvas_boxes_overlap(moving,
 					(CanvasBox){other->geom.x, other->geom.y,
 							other->geom.width, other->geom.height},
 					config.window_gap);
+			count++;
 		}
 	if (!count || !overlap)
 		return;
@@ -548,12 +561,11 @@ setcanvaszoom(Monitor *m, double zoom)
 	m->canvas_y = canvas_zoom_pan(anchor_y, m->m.y, m->canvas_y,
 			old_zoom, zoom);
 	m->canvas_zoom = zoom;
+	m->canvas_dirty = 1;
 	if (pan_target_matches) {
 		m->canvas_x_target = m->canvas_x;
 		m->canvas_y_target = m->canvas_y;
 	}
-	updatecanvas(m, 1);
-	motionnotify(0, NULL, 0, 0, 0, 0);
 }
 
 int
@@ -592,8 +604,6 @@ tickcanvascamera(Monitor *m, const struct timespec *now)
 			return 0;
 		m->canvas_x = m->canvas_x_target;
 		m->canvas_y = m->canvas_y_target;
-		updatecanvas(m, 0);
-		motionnotify(0, NULL, 0, 0, 0, 0);
 		return 0;
 	}
 	dt = now->tv_sec - m->canvas_camera_frame.tv_sec
@@ -604,8 +614,6 @@ tickcanvascamera(Monitor *m, const struct timespec *now)
 	y = canvas_animate_value(m->canvas_y, m->canvas_y_target, dt);
 	m->canvas_x = x;
 	m->canvas_y = y;
-	updatecanvas(m, 0);
-	motionnotify(0, NULL, 0, 0, 0, 0);
 	return x != m->canvas_x_target || y != m->canvas_y_target;
 }
 
@@ -647,11 +655,10 @@ tickcanvasedgepan(Monitor *m, const struct timespec *now)
 	m->canvas_y -= vy * dt;
 	m->canvas_x_target = m->canvas_x;
 	m->canvas_y_target = m->canvas_y;
-	updatecanvas(m, 0);
 	canvaspointtoworld(m, cursor->x, cursor->y, &world_x, &world_y);
 	geo = (struct wlr_box){
-		.x = (int)round(world_x - grabcx),
-		.y = (int)round(world_y - grabcy),
+		.x = canvas_round_coordinate(world_x - grabcx),
+		.y = canvas_round_coordinate(world_y - grabcy),
 		.width = grabc->geom.width,
 		.height = grabc->geom.height,
 	};

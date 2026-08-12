@@ -35,6 +35,11 @@ main(void)
 		{.x = 0, .y = 0, .width = 100, .height = 100},
 		{.x = 120, .y = 0, .width = 100, .height = 100},
 	};
+	CanvasBox fixed_three[] = {
+		{.x = 0, .y = 0, .width = 100, .height = 100},
+		{.x = 120, .y = 0, .width = 100, .height = 100},
+		{.x = 0, .y = 120, .width = 100, .height = 100},
+	};
 	CanvasBox edge_a = {.x = INT_MAX - 8, .y = 0, .width = 16, .height = 16};
 	CanvasBox edge_b = {.x = INT_MIN, .y = 0, .width = 16, .height = 16};
 	CanvasBox placed;
@@ -105,12 +110,18 @@ main(void)
 	assert(!canvas_boxes_overlap(placed, fixed[0], 16));
 	assert(!canvas_boxes_overlap(placed, fixed[1], 16));
 	assert(placed.x == 80 && placed.y == -76);
+	placed = canvas_place_nearest((CanvasBox){20, 20, 80, 80}, fixed_three, 3, 16);
+	for (size_t i = 0; i < 3; i++)
+		assert(!canvas_boxes_overlap(placed, fixed_three[i], 16));
 
 	assert(canvas_edge_pan_velocity(50, 0, 1920, 80, 120, 900) < 0);
 	assert(close_enough(canvas_edge_pan_velocity(960, 0, 1920, 80, 120, 900), 0));
 	assert(canvas_edge_pan_velocity(1919, 0, 1920, 80, 120, 900) > 800);
 	assert(canvas_clamp_coordinate((long long)INT_MAX + 1) == INT_MAX);
 	assert(canvas_clamp_coordinate((long long)INT_MIN - 1) == INT_MIN);
+	assert(canvas_round_coordinate((double)INT_MAX + 1000.0) == INT_MAX);
+	assert(canvas_round_coordinate((double)INT_MIN - 1000.0) == INT_MIN);
+	assert(canvas_round_coordinate(NAN) == 0);
 
 	wl_list_init(&links);
 	wl_list_insert(&links, &first.link);
@@ -138,6 +149,12 @@ main(void)
 	link = canvas_cycle_link(&clients, &focus_second.link, 1);
 	focus = wl_container_of(link, focus, link);
 	assert(focus == &focus_third);
+	link = canvas_cycle_link(&clients, &focus_first.link, 0);
+	focus = wl_container_of(link, focus, link);
+	assert(focus == &focus_third);
+	link = canvas_cycle_link(&clients, &focus_third.link, 0);
+	focus = wl_container_of(link, focus, link);
+	assert(focus == &focus_second);
 
 	puts("canvas tests passed");
 	return 0;
