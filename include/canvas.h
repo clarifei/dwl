@@ -1,12 +1,26 @@
 #ifndef CANVAS_H
 #define CANVAS_H
 
+#include <limits.h>
 #include <math.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #define CANVAS_NATIVE_ZOOM 1.0
 #define CANVAS_ZOOM_EPSILON 0.001
 #define CANVAS_ZOOM_RESPONSE 0.18
+
+typedef struct {
+	int x, y;
+	int width, height;
+} CanvasBox;
+
+static inline int
+canvas_clamp_coordinate(long long coordinate)
+{
+	return coordinate < INT_MIN ? INT_MIN
+			: coordinate > INT_MAX ? INT_MAX : (int)coordinate;
+}
 
 static inline double
 canvas_pan_delta(double delta, double speed)
@@ -87,6 +101,89 @@ canvas_output_mode_better(int width, int height, int refresh,
 	int64_t best_area = (int64_t)best_width * best_height;
 
 	return area > best_area || (area == best_area && refresh > best_refresh);
+}
+
+
+static inline int
+canvas_boxes_overlap(CanvasBox a, CanvasBox b, int gap)
+{
+	return (long long)a.x < (long long)b.x + b.width + gap
+			&& (long long)a.x + a.width + gap > b.x
+			&& (long long)a.y < (long long)b.y + b.height + gap
+			&& (long long)a.y + a.height + gap > b.y;
+}
+
+
+static inline CanvasBox
+canvas_place_nearest(CanvasBox moving, const CanvasBox *fixed, size_t count,
+		int gap)
+{
+	CanvasBox best = moving;
+	double best_distance = INFINITY;
+	size_t xi, yi, i;
+
+	for (i = 0; i < count; i++)
+		if (canvas_boxes_overlap(moving, fixed[i], gap))
+			break;
+	if (i == count)
+		return moving;
+
+	for (xi = 0; xi <= count * 2; xi++) {
+		int x = moving.x;
+
+		if (xi)
+			x = canvas_clamp_coordinate(xi & 1
+					? (long long)fixed[(xi - 1) / 2].x - moving.width - gap
+					: (long long)fixed[(xi - 1) / 2].x
+							+ fixed[(xi - 1) / 2].width + gap);
+		for (yi = 0; yi <= count * 2; yi++) {
+			CanvasBox candidate = moving;
+			double dx, dy, distance;
+
+			candidate.x = x;
+			if (yi)
+				candidate.y = canvas_clamp_coordinate(yi & 1
+						? (long long)fixed[(yi - 1) / 2].y - moving.height - gap
+						: (long long)fixed[(yi - 1) / 2].y
+								+ fixed[(yi - 1) / 2].height + gap);
+			for (i = 0; i < count; i++)
+				if (canvas_boxes_overlap(candidate, fixed[i], gap))
+					break;
+			if (i != count)
+				continue;
+			dx = (double)candidate.x - moving.x;
+			dy = (double)candidate.y - moving.y;
+			distance = dx * dx + dy * dy;
+			if (distance < best_distance) {
+				best = candidate;
+				best_distance = distance;
+			}
+		}
+	}
+	return best;
+}
+
+
+static inline double
+canvas_edge_pan_velocity(double position, double start, double length,
+		double zone, double min_speed, double max_speed)
+{
+	double distance, depth, direction;
+
+	if (zone <= 0.0 || length <= 0.0)
+		return 0.0;
+	if (position < start + zone) {
+		distance = position - start;
+		direction = -1.0;
+	} else if (position > start + length - zone) {
+		distance = start + length - position;
+		direction = 1.0;
+	} else {
+		return 0.0;
+	}
+	depth = fmax(0.0, fmin(1.0, (zone - distance) / zone));
+	return direction * (min_speed + (max_speed - min_speed) * depth * depth)
+			* depth;
 }
 
 #endif

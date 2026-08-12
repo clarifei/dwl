@@ -28,6 +28,8 @@ cleanup(void)
 	   to avoid destroying them with an invalid scene output. */
 	wlr_scene_node_destroy(&scene->tree.node);
 	config_free(&config);
+	cairo_debug_reset_static_data();
+	FcFini();
 }
 
 void

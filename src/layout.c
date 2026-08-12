@@ -277,6 +277,90 @@ clientsceneupdate(Client *c)
 		canvasnodescale(node, scale);
 }
 
+
+void
+clientsnap(Client *c, struct wlr_box *geo)
+{
+	Client *other;
+	long long best_dx = config.snap_distance + 1;
+	long long best_dy = config.snap_distance + 1;
+
+	if (!c || !geo || !ISCANVAS(c->mon) || config.snap_distance <= 0)
+		return;
+	wl_list_for_each(other, &clients, link) {
+		long long delta;
+
+		if (other == c || other->mon != c->mon || !VISIBLEON(other, c->mon)
+				|| other->isfullscreen || client_is_unmanaged(other))
+			continue;
+		if ((long long)geo->y < (long long)other->geom.y + other->geom.height
+				&& (long long)geo->y + geo->height > other->geom.y) {
+			delta = (long long)other->geom.x - config.window_gap
+					- geo->width - geo->x;
+			if (llabs(delta) < llabs(best_dx))
+				best_dx = delta;
+			delta = (long long)other->geom.x + other->geom.width
+					+ config.window_gap - geo->x;
+			if (llabs(delta) < llabs(best_dx))
+				best_dx = delta;
+		}
+		if ((long long)geo->x < (long long)other->geom.x + other->geom.width
+				&& (long long)geo->x + geo->width > other->geom.x) {
+			delta = (long long)other->geom.y - config.window_gap
+					- geo->height - geo->y;
+			if (llabs(delta) < llabs(best_dy))
+				best_dy = delta;
+			delta = (long long)other->geom.y + other->geom.height
+					+ config.window_gap - geo->y;
+			if (llabs(delta) < llabs(best_dy))
+				best_dy = delta;
+		}
+	}
+	if (llabs(best_dx) <= config.snap_distance)
+		geo->x = canvas_clamp_coordinate((long long)geo->x + best_dx);
+	if (llabs(best_dy) <= config.snap_distance)
+		geo->y = canvas_clamp_coordinate((long long)geo->y + best_dy);
+}
+
+
+void
+clientsettle(Client *c)
+{
+	CanvasBox moving, placed;
+	CanvasBox *fixed;
+	Client *other;
+	size_t count = 0, i = 0;
+	int overlap = 0;
+
+	if (!c || !ISCANVAS(c->mon) || client_is_unmanaged(c) || c->isfullscreen)
+		return;
+	moving = (CanvasBox){c->geom.x, c->geom.y, c->geom.width, c->geom.height};
+	wl_list_for_each(other, &clients, link)
+		if (other != c && other->mon == c->mon && VISIBLEON(other, c->mon)
+				&& !other->isfullscreen && !client_is_unmanaged(other)) {
+			count++;
+			overlap |= canvas_boxes_overlap(moving,
+					(CanvasBox){other->geom.x, other->geom.y,
+							other->geom.width, other->geom.height},
+					config.window_gap);
+		}
+	if (!count || !overlap)
+		return;
+	fixed = ecalloc(count, sizeof(*fixed));
+	wl_list_for_each(other, &clients, link) {
+		if (other == c || other->mon != c->mon || !VISIBLEON(other, c->mon)
+				|| other->isfullscreen || client_is_unmanaged(other))
+			continue;
+		fixed[i++] = (CanvasBox){other->geom.x, other->geom.y,
+				other->geom.width, other->geom.height};
+	}
+	placed = canvas_place_nearest(moving, fixed, count, config.window_gap);
+	free(fixed);
+	if (placed.x != c->geom.x || placed.y != c->geom.y)
+		resize(c, (struct wlr_box){placed.x, placed.y,
+				placed.width, placed.height}, 1);
+}
+
 void
 updatecanvas(Monitor *m, int rescale)
 {
@@ -305,7 +389,7 @@ arrange(Monitor *m)
 	wl_list_for_each(c, &clients, link) {
 		if (c->mon == m) {
 			wlr_scene_node_set_enabled(&c->scene->node, VISIBLEON(c, m));
-			client_set_suspended(c, !VISIBLEON(c, m));
+			client_set_suspended(c, !VISIBLEON(c, m) || c->iscollapsed);
 		}
 	}
 
@@ -450,6 +534,56 @@ tickcanvaszoom(Monitor *m, const struct timespec *now)
 			m->canvas_zoom_target, dt);
 	setcanvaszoom(m, new_zoom);
 	return new_zoom != m->canvas_zoom_target;
+}
+
+
+int
+tickcanvasedgepan(Monitor *m, const struct timespec *now)
+{
+	double dt, length, vx, vy, world_x, world_y;
+	struct wlr_box geo;
+
+	if (!m || cursor_mode != CurMove || !grabc || grabc->mon != m
+			|| xytomon(cursor->x, cursor->y) != m
+			|| !ISCANVAS(m))
+		return 0;
+	vx = canvas_edge_pan_velocity(cursor->x, m->w.x, m->w.width,
+			config.edge_pan_zone, config.edge_pan_min_speed,
+			config.edge_pan_max_speed);
+	vy = canvas_edge_pan_velocity(cursor->y, m->w.y, m->w.height,
+			config.edge_pan_zone, config.edge_pan_min_speed,
+			config.edge_pan_max_speed);
+	if (!vx && !vy) {
+		m->canvas_pan_frame = (struct timespec){0};
+		return 0;
+	}
+	length = hypot(vx, vy);
+	if (length > config.edge_pan_max_speed && length > 0.0) {
+		vx *= config.edge_pan_max_speed / length;
+		vy *= config.edge_pan_max_speed / length;
+	}
+	if (!m->canvas_pan_frame.tv_sec && !m->canvas_pan_frame.tv_nsec) {
+		m->canvas_pan_frame = *now;
+		return 1;
+	}
+	dt = now->tv_sec - m->canvas_pan_frame.tv_sec
+			+ (now->tv_nsec - m->canvas_pan_frame.tv_nsec) / 1000000000.0;
+	dt = MAX(0.0, MIN(dt, 1.0 / 30.0));
+	m->canvas_pan_frame = *now;
+	m->canvas_zoom_target = m->canvas_zoom;
+	m->canvas_x -= vx * dt;
+	m->canvas_y -= vy * dt;
+	updatecanvas(m, 0);
+	canvaspointtoworld(m, cursor->x, cursor->y, &world_x, &world_y);
+	geo = (struct wlr_box){
+		.x = (int)round(world_x - grabcx),
+		.y = (int)round(world_y - grabcy),
+		.width = grabc->geom.width,
+		.height = grabc->geom.height,
+	};
+	clientsnap(grabc, &geo);
+	resize(grabc, geo, 1);
+	return 1;
 }
 
 void

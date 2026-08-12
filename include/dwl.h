@@ -6,7 +6,10 @@
 #define DWL_H
 
 #include <errno.h>
+#include <cairo.h>
+#include <drm_fourcc.h>
 #include <fcntl.h>
+#include <fontconfig/fontconfig.h>
 #include <getopt.h>
 #include <limits.h>
 #include <libinput.h>
@@ -26,6 +29,7 @@
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
 #include <wlr/backend/libinput.h>
+#include <wlr/interfaces/wlr_buffer.h>
 #include <wlr/render/allocator.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_alpha_modifier_v1.h>
@@ -99,7 +103,7 @@
 #define LISTEN_STATIC(E, H)     do { struct wl_listener *_l = ecalloc(1, sizeof(*_l)); _l->notify = (H); wl_signal_add((E), _l); } while (0)
 
 /* enums */
-enum { CurNormal, CurPressed, CurMove, CurResize, CurPan }; /* cursor */
+enum { CurNormal, CurPressed, CurMove, CurResize, CurPan, CurConsumed }; /* cursor */
 enum { XDGShell, LayerShell, X11 }; /* client types */
 enum { LyrBg, LyrBottom, LyrTile, LyrFloat, LyrTop, LyrFS, LyrOverlay, LyrBlock, NUM_LAYERS }; /* scene layers */
 
@@ -126,6 +130,8 @@ typedef struct {
 	struct wlr_scene_tree *scene;
 	struct wlr_scene_rect *border[4]; /* top, bottom, left, right */
 	struct wlr_scene_tree *scene_surface;
+	struct wlr_scene_rect *collapsed_bg;
+	struct wlr_scene_buffer *collapsed_label;
 	struct wl_list link;
 	struct wl_list flink;
 	struct wlr_box geom; /* layout-relative, includes border */
@@ -154,7 +160,7 @@ typedef struct {
 #endif
 	unsigned int bw;
 	uint32_t tags;
-	int isfloating, isurgent, isfullscreen;
+	int isfloating, isurgent, isfullscreen, iscollapsed;
 	uint32_t resize; /* configure serial of a pending resize */
 } Client;
 
@@ -219,6 +225,7 @@ struct Monitor {
 	double canvas_x, canvas_y; /* screen-space translation */
 	double canvas_zoom, canvas_zoom_target;
 	struct timespec canvas_zoom_frame;
+	struct timespec canvas_pan_frame;
 	struct wl_list layers[4]; /* LayerSurface.link */
 	const Layout *lt[2];
 	unsigned int seltags;
@@ -276,6 +283,12 @@ typedef struct {
 	float zoom_min;
 	float zoom_max;
 	float zoom_step;
+	int window_gap;
+	int snap_distance;
+	int edge_pan_zone;
+	float edge_pan_min_speed;
+	float edge_pan_max_speed;
+	int collapsed_font_size;
 	int tagcount;
 	enum wlr_log_importance log_level;
 
@@ -322,8 +335,11 @@ static void arrangelayers(Monitor *m);
 static void axisnotify(struct wl_listener *listener, void *data);
 static void buttonpress(struct wl_listener *listener, void *data);
 static double clientcanvasscale(Client *c);
+static void clientcollapsedupdate(Client *c, int redraw);
+static void clientsettle(Client *c);
 static void clientsceneposition(Client *c);
 static void clientsceneupdate(Client *c);
+static void clientsnap(Client *c, struct wlr_box *geo);
 static void canvaspointtoscreen(Monitor *m, double x, double y,
 		double *screen_x, double *screen_y);
 static void canvaspointtoworld(Monitor *m, double x, double y,
@@ -425,9 +441,12 @@ static void swipeupdate(struct wl_listener *listener, void *data);
 static void tag(const Arg *arg);
 static void tagmon(const Arg *arg);
 static int tickcanvaszoom(Monitor *m, const struct timespec *now);
+static int tickcanvasedgepan(Monitor *m, const struct timespec *now);
 static void tile(Monitor *m);
 static void togglefloating(const Arg *arg);
 static void togglefullscreen(const Arg *arg);
+static void setcollapsed(Client *c, int collapsed);
+static void togglecollapse(const Arg *arg);
 static void toggletag(const Arg *arg);
 static void toggleview(const Arg *arg);
 static void updatecanvas(Monitor *m, int rescale);

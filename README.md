@@ -34,6 +34,9 @@ version of `wlroots` should target this branch.
 
 ### Building dwl
 dwl has the following dependencies:
+- cairo
+- fontconfig
+- libdrm
 - libinput
 - wayland
 - wlroots (compiled with the libinput backend)
@@ -79,6 +82,13 @@ workspaces. New windows open in the current viewport center.
 - `Alt` + `Tab` cycles to and centers a window; add `Shift` to reverse it.
   `Super` + `c` centers the active window.
 - `Super` + `-`/`=` zooms out/in; `Super` + `0` resets pan and zoom.
+- `Super` + `m` collapses the active window into an in-place title placeholder;
+  press it again or left-click the placeholder to restore the content.
+
+Nearby window edges snap together while dragging. A dropped or newly opened
+window is moved to the nearest free position with `canvas.window_gap` between
+it and its neighbors. Holding a dragged window inside `edge_pan_zone` at an
+output edge pans the canvas with a refresh-rate-independent speed ramp.
 
 `canvas.pan_speed`, `zoom_min`, and `zoom_step` calibrate navigation and are
 applied by hot reload. Zoom is animated at the output refresh rate and capped at

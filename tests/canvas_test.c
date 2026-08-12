@@ -19,6 +19,11 @@ main(void)
 	double world = canvas_screen_to_world(anchor, origin, pan, 1.0);
 	double zoomed_pan = canvas_zoom_pan(anchor, origin, pan, 1.0, 1.5);
 	double subpixel_pan = 0.0;
+	CanvasBox fixed[] = {
+		{.x = 0, .y = 0, .width = 100, .height = 100},
+		{.x = 120, .y = 0, .width = 100, .height = 100},
+	};
+	CanvasBox placed;
 
 	assert(close_enough(canvas_pan_delta(12.0, 1.0), 12.0));
 	assert(close_enough(canvas_axis_pan_delta(12.0, 1.0), -12.0));
@@ -51,6 +56,21 @@ main(void)
 		1920, 1080, 390297));
 	assert(!canvas_output_mode_better(1920, 1080, 60000,
 		1920, 1080, 390297));
+
+	assert(canvas_boxes_overlap((CanvasBox){10, 10, 50, 50}, fixed[0], 16));
+	assert(!canvas_boxes_overlap((CanvasBox){116, 0, 50, 50}, fixed[0], 16));
+	placed = canvas_place_nearest((CanvasBox){300, 20, 80, 60}, fixed, 2, 16);
+	assert(placed.x == 300 && placed.y == 20);
+	placed = canvas_place_nearest((CanvasBox){80, 20, 80, 60}, fixed, 2, 16);
+	assert(!canvas_boxes_overlap(placed, fixed[0], 16));
+	assert(!canvas_boxes_overlap(placed, fixed[1], 16));
+	assert(placed.x == 80 && placed.y == -76);
+
+	assert(canvas_edge_pan_velocity(50, 0, 1920, 80, 120, 900) < 0);
+	assert(close_enough(canvas_edge_pan_velocity(960, 0, 1920, 80, 120, 900), 0));
+	assert(canvas_edge_pan_velocity(1919, 0, 1920, 80, 120, 900) > 800);
+	assert(canvas_clamp_coordinate((long long)INT_MAX + 1) == INT_MAX);
+	assert(canvas_clamp_coordinate((long long)INT_MIN - 1) == INT_MIN);
 
 	puts("canvas tests passed");
 	return 0;

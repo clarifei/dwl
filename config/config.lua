@@ -16,6 +16,12 @@ return {
     zoom_min = 0.25,
     zoom_max = 1.0,
     zoom_step = 1.2,
+    window_gap = 16,
+    snap_distance = 24,
+    edge_pan_zone = 80,
+    edge_pan_min_speed = 120,
+    edge_pan_max_speed = 900,
+    collapsed_font_size = 16,
   },
 
   tagcount = 1,
@@ -71,6 +77,8 @@ return {
     { mods = {"SUPER"}, key = "equal", action = "zoomcanvas", value = 1.0 },
     { mods = {"SUPER", "SHIFT"}, key = "c", action = "killclient" },
     { mods = {"SUPER"}, key = "f", action = "togglefullscreen" },
+
+    { mods = {"SUPER"}, key = "m", action = "togglecollapse" },
     { mods = {"SUPER"}, key = "comma", action = "focusmon", value = "left" },
     { mods = {"SUPER"}, key = "period", action = "focusmon", value = "right" },
     { mods = {"SUPER", "SHIFT"}, key = "less", action = "tagmon", value = "left" },

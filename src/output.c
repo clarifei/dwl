@@ -455,10 +455,11 @@ rendermon(struct wl_listener *listener, void *data)
 	Client *c;
 	struct wlr_output_state pending = {0};
 	struct timespec now;
-	int zooming;
+	int animating;
 
 	clock_gettime(CLOCK_MONOTONIC, &now);
-	zooming = tickcanvaszoom(m, &now);
+	animating = tickcanvaszoom(m, &now);
+	animating |= tickcanvasedgepan(m, &now);
 
 	/* Render if no XDG clients have an outstanding resize and are visible on
 	 * this monitor. */
@@ -473,7 +474,7 @@ rendermon(struct wl_listener *listener, void *data)
 skip:
 	/* Let clients know a frame has been rendered */
 	wlr_scene_output_send_frame_done(m->scene_output, &now);
-	if (zooming)
+	if (animating)
 		wlr_output_schedule_frame(m->wlr_output);
 	wlr_output_state_finish(&pending);
 }

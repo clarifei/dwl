@@ -6,6 +6,132 @@ typedef struct {
 	struct wl_listener destroy;
 } PopupListener;
 
+typedef struct {
+	struct wlr_buffer base;
+	cairo_surface_t *surface;
+} CollapsedBuffer;
+
+static void
+collapsedbufferdestroy(struct wlr_buffer *wlr_buffer)
+{
+	CollapsedBuffer *buffer = wl_container_of(wlr_buffer, buffer, base);
+
+	wlr_buffer_finish(wlr_buffer);
+	cairo_surface_destroy(buffer->surface);
+	free(buffer);
+}
+
+static bool
+collapsedbufferbegin(struct wlr_buffer *wlr_buffer, uint32_t flags,
+		void **data, uint32_t *format, size_t *stride)
+{
+	CollapsedBuffer *buffer = wl_container_of(wlr_buffer, buffer, base);
+
+	if (flags & WLR_BUFFER_DATA_PTR_ACCESS_WRITE)
+		return false;
+	cairo_surface_flush(buffer->surface);
+	*data = cairo_image_surface_get_data(buffer->surface);
+	*format = DRM_FORMAT_ARGB8888;
+	*stride = (size_t)cairo_image_surface_get_stride(buffer->surface);
+	return true;
+}
+
+static void
+collapsedbufferend(struct wlr_buffer *wlr_buffer)
+{
+}
+
+static const struct wlr_buffer_impl collapsed_buffer_impl = {
+	.destroy = collapsedbufferdestroy,
+	.begin_data_ptr_access = collapsedbufferbegin,
+	.end_data_ptr_access = collapsedbufferend,
+};
+
+static struct wlr_buffer *
+collapsedbuffercreate(Client *c, int width, int height)
+{
+	CollapsedBuffer *buffer;
+	cairo_t *cr;
+	const char *title = client_get_title(c);
+	double baseline;
+
+	buffer = ecalloc(1, sizeof(*buffer));
+	buffer->surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
+			width, height);
+	if (cairo_surface_status(buffer->surface) != CAIRO_STATUS_SUCCESS)
+		die("collapsed label: cairo surface");
+	cr = cairo_create(buffer->surface);
+	if (cairo_status(cr) != CAIRO_STATUS_SUCCESS)
+		die("collapsed label: cairo context");
+	cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+	cairo_set_source_rgba(cr, 0, 0, 0, 0);
+	cairo_paint(cr);
+	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+	cairo_rectangle(cr, 8, 0, MAX(1, width - 16), height);
+	cairo_clip(cr);
+	cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
+			CAIRO_FONT_WEIGHT_NORMAL);
+	cairo_set_font_size(cr, config.collapsed_font_size);
+	cairo_set_source_rgba(cr, config.focuscolor[0], config.focuscolor[1],
+			config.focuscolor[2], config.focuscolor[3]);
+	baseline = (height + config.collapsed_font_size) / 2.0 - 2.0;
+	cairo_move_to(cr, 8, baseline);
+	cairo_show_text(cr, "MINIMIZED  |  ");
+	cairo_show_text(cr, title);
+	cairo_destroy(cr);
+	cairo_surface_flush(buffer->surface);
+	wlr_buffer_init(&buffer->base, &collapsed_buffer_impl, width, height);
+	return &buffer->base;
+}
+
+void
+clientcollapsedupdate(Client *c, int redraw)
+{
+	struct wlr_buffer *buffer;
+	int width, height, label_width, label_height, x, y;
+
+	if (!c || !c->scene || !c->scene_surface)
+		return;
+	wlr_scene_node_set_enabled(&c->scene_surface->node, !c->iscollapsed);
+	if (!c->iscollapsed) {
+		if (c->collapsed_label)
+			wlr_scene_node_destroy(&c->collapsed_label->node);
+		if (c->collapsed_bg)
+			wlr_scene_node_destroy(&c->collapsed_bg->node);
+		c->collapsed_label = NULL;
+		c->collapsed_bg = NULL;
+		return;
+	}
+	if (!c->collapsed_bg) {
+		c->collapsed_bg = wlr_scene_rect_create(c->scene, 1, 1,
+				config.rootcolor);
+		c->collapsed_bg->node.data = c;
+	}
+	width = MAX(1, c->geom.width - 2 * (int)c->bw);
+	height = MAX(1, c->geom.height - 2 * (int)c->bw);
+	wlr_scene_rect_set_size(c->collapsed_bg, width, height);
+	wlr_scene_rect_set_color(c->collapsed_bg, config.rootcolor);
+	wlr_scene_node_set_position(&c->collapsed_bg->node, c->bw, c->bw);
+	label_width = MIN(width, 640);
+	label_height = MIN(height, config.collapsed_font_size + 16);
+	if (c->collapsed_label && (c->collapsed_label->buffer->width != label_width
+			|| c->collapsed_label->buffer->height != label_height))
+		redraw = 1;
+	if (redraw && c->collapsed_label) {
+		wlr_scene_node_destroy(&c->collapsed_label->node);
+		c->collapsed_label = NULL;
+	}
+	if (!c->collapsed_label) {
+		buffer = collapsedbuffercreate(c, label_width, label_height);
+		c->collapsed_label = wlr_scene_buffer_create(c->scene, buffer);
+		wlr_buffer_drop(buffer);
+		c->collapsed_label->node.data = c;
+	}
+	x = c->bw + (width - c->collapsed_label->buffer->width) / 2;
+	y = c->bw + (height - c->collapsed_label->buffer->height) / 2;
+	wlr_scene_node_set_position(&c->collapsed_label->node, x, y);
+}
+
 static void
 destroypopuplistener(struct wl_listener *listener, void *data)
 {
@@ -275,6 +401,11 @@ focusclient(Client *c, int lift)
 		wlr_seat_keyboard_notify_clear_focus(seat);
 		return;
 	}
+	if (c->iscollapsed) {
+		motionnotify(0, NULL, 0, 0, 0, 0);
+		wlr_seat_keyboard_notify_clear_focus(seat);
+		return;
+	}
 
 	/* Change cursor surface */
 	motionnotify(0, NULL, 0, 0, 0, 0);
@@ -351,7 +482,6 @@ mapnotify(struct wl_listener *listener, void *data)
 				c->isurgent ? config.urgentcolor : config.bordercolor);
 		c->border[i]->node.data = c;
 	}
-
 	/* Initialize client geometry with room for border */
 	client_set_tiled(c, WLR_EDGE_TOP | WLR_EDGE_BOTTOM | WLR_EDGE_LEFT | WLR_EDGE_RIGHT);
 	c->geom.width += 2 * c->bw;
@@ -382,6 +512,7 @@ mapnotify(struct wl_listener *listener, void *data)
 			.width = c->geom.width,
 			.height = c->geom.height,
 		}, 1);
+		clientsettle(c);
 	}
 	printstatus();
 
@@ -452,6 +583,8 @@ resize(Client *c, struct wlr_box geo, int interact)
 			c->geom.height - 2 * c->bw);
 	client_get_clip(c, &clip);
 	wlr_scene_subsurface_tree_set_clip(&c->scene_surface->node, &clip);
+	if (c->collapsed_bg)
+		clientcollapsedupdate(c, 0);
 	clientsceneupdate(c);
 }
 
@@ -473,6 +606,11 @@ setfloating(Client *c, int floating)
 void
 setfullscreen(Client *c, int fullscreen)
 {
+	if (fullscreen && c->iscollapsed) {
+		c->iscollapsed = 0;
+		clientcollapsedupdate(c, 0);
+		client_set_suspended(c, 0);
+	}
 	c->isfullscreen = fullscreen;
 	if (!c->mon || !client_surface(c)->mapped)
 		return;
@@ -491,6 +629,34 @@ setfullscreen(Client *c, int fullscreen)
 	}
 	arrange(c->mon);
 	printstatus();
+}
+
+void
+setcollapsed(Client *c, int collapsed)
+{
+	if (!c || c->isfullscreen || client_is_unmanaged(c))
+		return;
+	c->iscollapsed = collapsed;
+	clientcollapsedupdate(c, 1);
+	client_set_suspended(c, c->iscollapsed);
+	clientsceneupdate(c);
+	if (c->iscollapsed) {
+		client_activate_surface(client_surface(c), 0);
+		wlr_seat_keyboard_notify_clear_focus(seat);
+		motionnotify(0, NULL, 0, 0, 0, 0);
+	} else {
+		focusclient(c, 1);
+	}
+	printstatus();
+}
+
+void
+togglecollapse(const Arg *arg)
+{
+	Client *c = focustop(selmon);
+
+	if (c)
+		setcollapsed(c, !c->iscollapsed);
 }
 
 void
@@ -538,6 +704,8 @@ unmapnotify(struct wl_listener *listener, void *data)
 	}
 
 	wlr_scene_node_destroy(&c->scene->node);
+	c->collapsed_bg = NULL;
+	c->collapsed_label = NULL;
 	printstatus();
 	motionnotify(0, NULL, 0, 0, 0, 0);
 }
@@ -546,6 +714,10 @@ void
 updatetitle(struct wl_listener *listener, void *data)
 {
 	Client *c = wl_container_of(listener, c, set_title);
+	if (c->iscollapsed) {
+		clientcollapsedupdate(c, 1);
+		clientsceneupdate(c);
+	}
 	if (c == focustop(c->mon))
 		printstatus();
 }

@@ -80,6 +80,11 @@ buttonpress(struct wl_listener *listener, void *data)
 				return;
 			}
 		}
+		if (c && c->iscollapsed && event->button == BTN_LEFT) {
+			setcollapsed(c, 0);
+			cursor_mode = CurConsumed;
+			return;
+		}
 		if (event->button == BTN_LEFT && !surface && !c && ISCANVAS(selmon)) {
 			startpan(NULL);
 			return;
@@ -89,6 +94,8 @@ buttonpress(struct wl_listener *listener, void *data)
 		/* If you released any buttons, we exit interactive move/resize mode. */
 		/* TODO: should reset to the pointer focus's current setcursor */
 		if (!locked && (cursor_mode == CurMove || cursor_mode == CurResize)) {
+			Client *settled = grabc;
+
 			wlr_cursor_set_xcursor(cursor, cursor_mgr, "default");
 			cursor_mode = CurNormal;
 			/* Drop the window off on its new monitor */
@@ -96,12 +103,18 @@ buttonpress(struct wl_listener *listener, void *data)
 			if (grabc)
 				setmon(grabc, selmon, 0);
 			grabc = NULL;
+			if (settled)
+				clientsettle(settled);
 			return;
 		}
 		if (!locked && cursor_mode == CurPan) {
 			wlr_cursor_set_xcursor(cursor, cursor_mgr, "default");
 			cursor_mode = CurNormal;
 			motionnotify(0, NULL, 0, 0, 0, 0);
+			return;
+		}
+		if (cursor_mode == CurConsumed) {
+			cursor_mode = CurNormal;
 			return;
 		}
 		cursor_mode = CurNormal;
@@ -563,10 +576,15 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 
 	/* If we are currently grabbing the mouse, handle and return */
 	if (cursor_mode == CurMove) {
+		struct wlr_box geo;
+
 		/* Move the grabbed client to the new position. */
 		canvaspointtoworld(grabc->mon, cursor->x, cursor->y, &x, &y);
-		resize(grabc, (struct wlr_box){.x = (int)round(x - grabcx), .y = (int)round(y - grabcy),
-			.width = grabc->geom.width, .height = grabc->geom.height}, 1);
+		geo = (struct wlr_box){.x = (int)round(x - grabcx), .y = (int)round(y - grabcy),
+			.width = grabc->geom.width, .height = grabc->geom.height};
+		clientsnap(grabc, &geo);
+		resize(grabc, geo, 1);
+		wlr_output_schedule_frame(grabc->mon->wlr_output);
 		return;
 	} else if (cursor_mode == CurResize) {
 		canvaspointtoworld(grabc->mon, cursor->x, cursor->y, &x, &y);
@@ -619,6 +637,7 @@ moveresize(const Arg *arg)
 	canvaspointtoworld(grabc->mon, cursor->x, cursor->y, &x, &y);
 	switch (cursor_mode = arg->ui) {
 	case CurMove:
+		clock_gettime(CLOCK_MONOTONIC, &grabc->mon->canvas_pan_frame);
 		grabcx = x - grabc->geom.x;
 		grabcy = y - grabc->geom.y;
 		wlr_cursor_set_xcursor(cursor, cursor_mgr, "all-scroll");
@@ -634,6 +653,8 @@ moveresize(const Arg *arg)
 		wlr_cursor_set_xcursor(cursor, cursor_mgr, "se-resize");
 		break;
 	}
+	if (cursor_mode == CurMove)
+		wlr_output_schedule_frame(grabc->mon->wlr_output);
 }
 
 void
@@ -737,7 +758,8 @@ pointerfocus(Client *c, struct wlr_surface *surface, double sx, double sy,
 	struct timespec now;
 
 	if (surface != seat->pointer_state.focused_surface &&
-			config.sloppyfocus && time && c && !client_is_unmanaged(c))
+			config.sloppyfocus && time && c && !c->iscollapsed
+			&& !client_is_unmanaged(c))
 		focusclient(c, 0);
 
 	/* If surface is NULL, clear pointer focus */
@@ -831,9 +853,12 @@ xytonode(double x, double y, struct wlr_surface **psurface,
 		if (!(node = wlr_scene_node_at(&layers[layer]->node, x, y, nx, ny)))
 			continue;
 
-		if (node->type == WLR_SCENE_NODE_BUFFER)
-			surface = wlr_scene_surface_try_from_buffer(
-					wlr_scene_buffer_from_node(node))->surface;
+		if (node->type == WLR_SCENE_NODE_BUFFER) {
+			struct wlr_scene_surface *scene_surface = wlr_scene_surface_try_from_buffer(
+					wlr_scene_buffer_from_node(node));
+			if (scene_surface)
+				surface = scene_surface->surface;
+		}
 		/* Walk the tree to find a node that knows the client */
 		for (pnode = node; pnode && !c; pnode = &pnode->parent->node)
 			c = pnode->data;
@@ -841,6 +866,8 @@ xytonode(double x, double y, struct wlr_surface **psurface,
 			c = NULL;
 			l = pnode->data;
 		}
+		if (c || l)
+			break;
 	}
 
 	if (psurface) *psurface = surface;

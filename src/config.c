@@ -281,6 +281,8 @@ config_action(const char *name, ConfigArg *argtype)
 		return togglefloating;
 	if (!strcmp(name, "togglefullscreen"))
 		return togglefullscreen;
+	if (!strcmp(name, "togglecollapse"))
+		return togglecollapse;
 	return NULL;
 }
 
@@ -693,12 +695,36 @@ config_parse_canvas(lua_State *lua, Config *cfg)
 	cfg->zoom_min = config_float_field(lua, -1, "zoom_min", cfg->zoom_min);
 	cfg->zoom_max = config_float_field(lua, -1, "zoom_max", cfg->zoom_max);
 	cfg->zoom_step = config_float_field(lua, -1, "zoom_step", cfg->zoom_step);
+	cfg->window_gap = config_int_field(lua, -1, "window_gap", cfg->window_gap);
+	cfg->snap_distance = config_int_field(lua, -1,
+			"snap_distance", cfg->snap_distance);
+	cfg->edge_pan_zone = config_int_field(lua, -1,
+			"edge_pan_zone", cfg->edge_pan_zone);
+	cfg->edge_pan_min_speed = config_float_field(lua, -1,
+			"edge_pan_min_speed", cfg->edge_pan_min_speed);
+	cfg->edge_pan_max_speed = config_float_field(lua, -1,
+			"edge_pan_max_speed", cfg->edge_pan_max_speed);
+	cfg->collapsed_font_size = config_int_field(lua, -1,
+			"collapsed_font_size", cfg->collapsed_font_size);
 	if (cfg->zoom_min < 0.1f || cfg->zoom_min > 1.0f)
 		luaL_error(lua, "canvas.zoom_min must be between 0.1 and 1");
 	if (cfg->zoom_max != 1.0f || cfg->zoom_max < cfg->zoom_min)
 		luaL_error(lua, "canvas.zoom_max must be 1 (native resolution)");
 	if (cfg->zoom_step <= 1.0f || cfg->zoom_step > 2.0f)
 		luaL_error(lua, "canvas.zoom_step must be greater than 1 and at most 2");
+	if (cfg->window_gap < 0 || cfg->window_gap > 256)
+		luaL_error(lua, "canvas.window_gap must be between 0 and 256");
+	if (cfg->snap_distance < 0 || cfg->snap_distance > 256)
+		luaL_error(lua, "canvas.snap_distance must be between 0 and 256");
+	if (cfg->edge_pan_zone < 0 || cfg->edge_pan_zone > 512)
+		luaL_error(lua, "canvas.edge_pan_zone must be between 0 and 512");
+	if (!isfinite(cfg->edge_pan_min_speed) || !isfinite(cfg->edge_pan_max_speed)
+			|| cfg->edge_pan_min_speed < 0.0f
+			|| cfg->edge_pan_min_speed > cfg->edge_pan_max_speed
+			|| cfg->edge_pan_max_speed > 5000.0f)
+		luaL_error(lua, "canvas edge pan speeds must satisfy 0 <= min <= max <= 5000");
+	if (cfg->collapsed_font_size < 8 || cfg->collapsed_font_size > 64)
+		luaL_error(lua, "canvas.collapsed_font_size must be between 8 and 64");
 	lua_pop(lua, 1);
 }
 
@@ -1212,6 +1238,12 @@ config_defaults(Config *cfg)
 	cfg->zoom_min = 0.25f;
 	cfg->zoom_max = CANVAS_NATIVE_ZOOM;
 	cfg->zoom_step = 1.2f;
+	cfg->window_gap = 16;
+	cfg->snap_distance = 24;
+	cfg->edge_pan_zone = 80;
+	cfg->edge_pan_min_speed = 120.0f;
+	cfg->edge_pan_max_speed = 900.0f;
+	cfg->collapsed_font_size = 16;
 	cfg->tagcount = 1;
 	cfg->log_level = WLR_ERROR;
 	cfg->repeat_rate = 25;
@@ -1247,6 +1279,7 @@ config_defaults(Config *cfg)
 	config_default_key(cfg, mod, XKB_KEY_equal, zoomcanvas, (Arg){.f = 1.0f});
 	config_default_key(cfg, mod | WLR_MODIFIER_SHIFT, XKB_KEY_c, killclient, (Arg){0});
 	config_default_key(cfg, mod, XKB_KEY_f, togglefullscreen, (Arg){0});
+	config_default_key(cfg, mod, XKB_KEY_m, togglecollapse, (Arg){0});
 	config_default_key(cfg, mod, XKB_KEY_comma, focusmon,
 			(Arg){.i = WLR_DIRECTION_LEFT});
 	config_default_key(cfg, mod, XKB_KEY_period, focusmon,
@@ -1528,6 +1561,8 @@ config_apply_live(const Config *old)
 		if (c->scene) {
 			client_set_border_color(c, c == focustop(c->mon) ? config.focuscolor
 					: c->isurgent ? config.urgentcolor : config.bordercolor);
+			if (c->iscollapsed)
+				clientcollapsedupdate(c, 1);
 			resize(c, c->geom, 0);
 		}
 	}
