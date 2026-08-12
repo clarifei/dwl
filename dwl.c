@@ -115,6 +115,7 @@ static struct wlr_xwayland *xwayland;
 #include "src/client.c"
 #include "src/layout.c"
 #include "src/input.c"
+#include "src/background-effect.c"
 #include "src/output.c"
 #include "src/session.c"
 #include "src/server.c"

@@ -12,19 +12,23 @@ DWLDEVCFLAGS = -g -Wpedantic -Wall -Wextra -Wdeclaration-after-statement \
 	-Wfloat-conversion
 
 # CFLAGS / LDFLAGS
-PKGS      = scenefx-0.4 wayland-server xkbcommon libinput lua5.4 cairo fontconfig libdrm $(XLIBS)
+PKGS      = scenefx-0.4 wayland-server xkbcommon libinput lua5.4 cairo fontconfig libdrm pixman-1 $(XLIBS)
 DWLCFLAGS = `$(PKG_CONFIG) --cflags $(PKGS)` $(WLR_INCS) $(DWLCPPFLAGS) $(DWLDEVCFLAGS) $(CFLAGS)
 LDLIBS    = `$(PKG_CONFIG) --libs $(PKGS)` $(WLR_LIBS) -lm $(LIBS)
-DWL_SRC   = dwl.c include/dwl.h include/canvas.h include/client.h include/util.h src/client.c src/input.c src/layout.c \
-	src/output.c src/server.c src/session.c src/config.c src/xwayland.c
+DWL_SRC   = dwl.c include/dwl.h include/canvas.h include/client.h include/util.h src/background-effect.c src/client.c \
+		src/input.c src/layout.c src/output.c src/server.c src/session.c src/config.c src/xwayland.c
+PROTOCOL_OBJ = ext-background-effect-v1-protocol.o
 
 all: dwl
-dwl: dwl.o util.o
-	$(CC) dwl.o util.o $(DWLCFLAGS) $(LDFLAGS) $(LDLIBS) -o $@
+dwl: dwl.o util.o $(PROTOCOL_OBJ)
+	$(CC) dwl.o util.o $(PROTOCOL_OBJ) $(DWLCFLAGS) $(LDFLAGS) $(LDLIBS) -o $@
 dwl.o: $(DWL_SRC) config.mk cursor-shape-v1-protocol.h \
-	pointer-constraints-unstable-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h \
-	wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
+		ext-background-effect-v1-protocol.h \
+		pointer-constraints-unstable-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h \
+		wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
 util.o: util.c include/util.h
+ext-background-effect-v1-protocol.o: ext-background-effect-v1-protocol.c \
+		ext-background-effect-v1-protocol.h
 
 test: tests/canvas_test
 	./tests/canvas_test
@@ -41,6 +45,12 @@ WAYLAND_PROTOCOLS = `$(PKG_CONFIG) --variable=pkgdatadir wayland-protocols`
 cursor-shape-v1-protocol.h:
 	$(WAYLAND_SCANNER) enum-header \
 		$(WAYLAND_PROTOCOLS)/staging/cursor-shape/cursor-shape-v1.xml $@
+ext-background-effect-v1-protocol.h:
+	$(WAYLAND_SCANNER) server-header \
+		$(WAYLAND_PROTOCOLS)/staging/ext-background-effect/ext-background-effect-v1.xml $@
+ext-background-effect-v1-protocol.c:
+	$(WAYLAND_SCANNER) private-code \
+		$(WAYLAND_PROTOCOLS)/staging/ext-background-effect/ext-background-effect-v1.xml $@
 pointer-constraints-unstable-v1-protocol.h:
 	$(WAYLAND_SCANNER) enum-header \
 		$(WAYLAND_PROTOCOLS)/unstable/pointer-constraints/pointer-constraints-unstable-v1.xml $@
@@ -55,7 +65,7 @@ xdg-shell-protocol.h:
 		$(WAYLAND_PROTOCOLS)/stable/xdg-shell/xdg-shell.xml $@
 
 clean:
-	rm -f dwl *.o *-protocol.h tests/canvas_test
+	rm -f dwl *.o *-protocol.c *-protocol.h tests/canvas_test
 
 dist: clean
 	mkdir -p dwl-$(VERSION)

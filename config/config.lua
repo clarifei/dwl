@@ -27,7 +27,6 @@ return {
     },
     blur = {
       enabled = true,
-      optimized = true,
       passes = 2,
       radius = 4,
       noise = 0,
@@ -35,6 +34,10 @@ return {
       contrast = 0.9,
       saturation = 1.1,
       ignore_transparent = true,
+    },
+    layer_shell = {
+      enabled = true,
+      opacity = 0.90,
     },
   },
 
@@ -49,6 +52,9 @@ return {
     edge_pan_min_speed = 120,
     edge_pan_max_speed = 900,
     collapsed_font_size = 16,
+    collapsed_scrim = "#00000099",
+    collapsed_title_color = "#ffffffff",
+    collapsed_detail_color = "#b8b8b8ff",
   },
 
   tagcount = 1,

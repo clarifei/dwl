@@ -15,6 +15,7 @@
 #include <libinput.h>
 #include <linux/input-event-codes.h>
 #include <math.h>
+#include <pixman.h>
 #include <scenefx/render/fx_renderer/fx_renderer.h>
 #include <scenefx/types/fx/clipped_region.h>
 #include <scenefx/types/fx/corner_location.h>
@@ -108,7 +109,7 @@
 /* enums */
 enum { CurNormal, CurPressed, CurMove, CurResize, CurPan, CurConsumed }; /* cursor */
 enum { XDGShell, LayerShell, X11 }; /* client types */
-enum { LyrBg, LyrBottom, LyrBlur, LyrTile, LyrFloat, LyrTop, LyrFS, LyrOverlay, LyrBlock, NUM_LAYERS }; /* scene layers */
+enum { LyrBg, LyrBottom, LyrTile, LyrFloat, LyrTop, LyrFS, LyrOverlay, LyrBlock, NUM_LAYERS }; /* scene layers */
 
 typedef union {
 	int i;
@@ -135,8 +136,9 @@ typedef struct {
 	struct wlr_scene_tree *scene_surface;
 	struct wlr_scene_buffer *effect_buffer;
 	struct wlr_scene_shadow *shadow;
-	struct wlr_scene_rect *collapsed_bg;
+	struct wlr_scene_rect *collapsed_scrim;
 	struct wlr_scene_buffer *collapsed_label;
+	int collapsed_label_width, collapsed_label_height;
 	struct wl_list link;
 	struct wl_list flink;
 	struct wlr_box geom; /* layout-relative, includes border */
@@ -199,7 +201,9 @@ typedef struct {
 	Monitor *mon;
 	struct wlr_scene_tree *scene;
 	struct wlr_scene_tree *popups;
+	struct wlr_scene_tree *effects;
 	struct wlr_scene_layer_surface_v1 *scene_layer;
+	struct wl_list effect_rects;
 	struct wl_list link;
 	int mapped;
 	struct wlr_layer_surface_v1 *layer_surface;
@@ -220,7 +224,6 @@ struct Monitor {
 	struct wlr_output *wlr_output;
 	struct wlr_scene_output *scene_output;
 	struct wlr_scene_rect *fullscreen_bg; /* See createmon() for info */
-	struct wlr_scene_optimized_blur *optimized_blur;
 	struct wl_listener frame;
 	struct wl_listener destroy;
 	struct wl_listener request_state;
@@ -295,7 +298,6 @@ typedef struct {
 	int shadow_offset_y;
 	float shadow_color[4];
 	int blur_enabled;
-	int blur_optimized;
 	int blur_passes;
 	int blur_radius;
 	float blur_noise;
@@ -303,6 +305,8 @@ typedef struct {
 	float blur_contrast;
 	float blur_saturation;
 	int blur_ignore_transparent;
+	int layer_effects_enabled;
+	float layer_opacity;
 	float pan_speed;
 	float zoom_min;
 	float zoom_max;
@@ -313,6 +317,9 @@ typedef struct {
 	float edge_pan_min_speed;
 	float edge_pan_max_speed;
 	int collapsed_font_size;
+	float collapsed_scrim[4];
+	float collapsed_title_color[4];
+	float collapsed_detail_color[4];
 	int tagcount;
 	enum wlr_log_importance log_level;
 
@@ -358,6 +365,8 @@ static void arrangelayer(Monitor *m, struct wl_list *list,
 static void arrangelayers(Monitor *m);
 static void axisnotify(struct wl_listener *listener, void *data);
 static void buttonpress(struct wl_listener *listener, void *data);
+static const pixman_region32_t *backgroundeffectregion(struct wlr_surface *surface);
+static void backgroundeffectsinit(void);
 static double clientcanvasscale(Client *c);
 static void clientcollapsedupdate(Client *c, int redraw);
 static void clienteffectsupdate(Client *c);
@@ -422,6 +431,9 @@ static void keypress(struct wl_listener *listener, void *data);
 static void keypressmod(struct wl_listener *listener, void *data);
 static int keyrepeat(void *data);
 static void killclient(const Arg *arg);
+static void layereffectsclear(LayerSurface *l);
+static void layereffectsupdate(LayerSurface *l);
+static void layereffectsupdateall(void);
 static void locksession(struct wl_listener *listener, void *data);
 static void mapnotify(struct wl_listener *listener, void *data);
 static void maximizenotify(struct wl_listener *listener, void *data);
@@ -430,8 +442,6 @@ static void motionabsolute(struct wl_listener *listener, void *data);
 static void motionnotify(uint32_t time, struct wlr_input_device *device, double sx,
 		double sy, double sx_unaccel, double sy_unaccel);
 static void motionrelative(struct wl_listener *listener, void *data);
-static void monitorblurdirty(Monitor *m);
-static void monitorblurupdate(Monitor *m);
 static void moveresize(const Arg *arg);
 static void outputmgrapply(struct wl_listener *listener, void *data);
 static void outputmgrapplyortest(struct wlr_output_configuration_v1 *config, int test);

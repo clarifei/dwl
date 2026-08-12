@@ -90,10 +90,8 @@ gpureset(struct wl_listener *listener, void *data)
 
 	wlr_compositor_set_renderer(compositor, drw);
 
-	wl_list_for_each(m, &mons, link) {
+	wl_list_for_each(m, &mons, link)
 		wlr_output_init_render(m->wlr_output, alloc, drw);
-		monitorblurdirty(m);
-	}
 
 	wlr_allocator_destroy(old_alloc);
 	wlr_renderer_destroy(old_drw);
@@ -263,6 +261,7 @@ setup(void)
 	wlr_fractional_scale_manager_v1_create(dpy, 1);
 	wlr_presentation_create(dpy, backend, 2);
 	wlr_alpha_modifier_v1_create(dpy);
+	backgroundeffectsinit();
 
 	/* Initializes the interface used to implement urgency hints */
 	activation = wlr_xdg_activation_v1_create(dpy);

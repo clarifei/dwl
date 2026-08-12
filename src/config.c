@@ -738,8 +738,6 @@ config_parse_effects(lua_State *lua, Config *cfg)
 		luaL_checktype(lua, -1, LUA_TTABLE);
 		cfg->blur_enabled = config_bool_field(lua, -1,
 				"enabled", cfg->blur_enabled);
-		cfg->blur_optimized = config_bool_field(lua, -1,
-				"optimized", cfg->blur_optimized);
 		cfg->blur_passes = config_int_field(lua, -1,
 				"passes", cfg->blur_passes);
 		cfg->blur_radius = config_int_field(lua, -1,
@@ -766,6 +764,19 @@ config_parse_effects(lua_State *lua, Config *cfg)
 				|| cfg->blur_contrast < 0.0f || cfg->blur_contrast > 2.0f
 				|| cfg->blur_saturation < 0.0f || cfg->blur_saturation > 2.0f)
 			luaL_error(lua, "effects.blur color values must be between 0 and 2");
+	}
+	lua_pop(lua, 1);
+
+	lua_getfield(lua, -1, "layer_shell");
+	if (!lua_isnil(lua, -1)) {
+		luaL_checktype(lua, -1, LUA_TTABLE);
+		cfg->layer_effects_enabled = config_bool_field(lua, -1,
+				"enabled", cfg->layer_effects_enabled);
+		cfg->layer_opacity = config_float_field(lua, -1,
+				"opacity", cfg->layer_opacity);
+		if (!isfinite(cfg->layer_opacity) || cfg->layer_opacity < 0.0f
+				|| cfg->layer_opacity > 1.0f)
+			luaL_error(lua, "effects.layer_shell.opacity must be between 0 and 1");
 	}
 	lua_pop(lua, 2);
 }
@@ -796,6 +807,11 @@ config_parse_canvas(lua_State *lua, Config *cfg)
 			"edge_pan_max_speed", cfg->edge_pan_max_speed);
 	cfg->collapsed_font_size = config_int_field(lua, -1,
 			"collapsed_font_size", cfg->collapsed_font_size);
+	config_color_field(lua, -1, "collapsed_scrim", cfg->collapsed_scrim);
+	config_color_field(lua, -1, "collapsed_title_color",
+			cfg->collapsed_title_color);
+	config_color_field(lua, -1, "collapsed_detail_color",
+			cfg->collapsed_detail_color);
 	if (cfg->zoom_min < 0.1f || cfg->zoom_min > 1.0f)
 		luaL_error(lua, "canvas.zoom_min must be between 0.1 and 1");
 	if (cfg->zoom_max != 1.0f || cfg->zoom_max < cfg->zoom_min)
@@ -1335,7 +1351,6 @@ config_defaults(Config *cfg)
 	cfg->shadow_offset_y = 6;
 	config_set_color(cfg->shadow_color, 0x00000066);
 	cfg->blur_enabled = 0;
-	cfg->blur_optimized = 1;
 	cfg->blur_passes = 2;
 	cfg->blur_radius = 4;
 	cfg->blur_noise = 0.0f;
@@ -1343,6 +1358,8 @@ config_defaults(Config *cfg)
 	cfg->blur_contrast = 0.9f;
 	cfg->blur_saturation = 1.1f;
 	cfg->blur_ignore_transparent = 1;
+	cfg->layer_effects_enabled = 0;
+	cfg->layer_opacity = 1.0f;
 	cfg->pan_speed = 1.0f;
 	cfg->zoom_min = 0.25f;
 	cfg->zoom_max = CANVAS_NATIVE_ZOOM;
@@ -1353,6 +1370,9 @@ config_defaults(Config *cfg)
 	cfg->edge_pan_min_speed = 120.0f;
 	cfg->edge_pan_max_speed = 900.0f;
 	cfg->collapsed_font_size = 16;
+	config_set_color(cfg->collapsed_scrim, 0x00000099);
+	config_set_color(cfg->collapsed_title_color, 0xffffffff);
+	config_set_color(cfg->collapsed_detail_color, 0xb8b8b8ff);
 	cfg->tagcount = 1;
 	cfg->log_level = WLR_ERROR;
 	cfg->repeat_rate = 25;
@@ -1661,8 +1681,6 @@ config_apply_live(const Config *old)
 				config.zoom_max, m->canvas_zoom_target);
 		if (m->fullscreen_bg)
 			wlr_scene_rect_set_color(m->fullscreen_bg, config.fullscreen_bg);
-		monitorblurupdate(m);
-		monitorblurdirty(m);
 		wlr_output_state_init(&state);
 		wlr_output_state_set_scale(&state, rule->scale);
 		wlr_output_state_set_transform(&state, rule->rr);
@@ -1671,6 +1689,7 @@ config_apply_live(const Config *old)
 		arrangelayers(m);
 		arrange(m);
 	}
+	layereffectsupdateall();
 	wl_list_for_each(c, &clients, link) {
 		if (client_is_unmanaged(c))
 			continue;

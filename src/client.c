@@ -116,8 +116,7 @@ clienteffectsupdate(Client *c)
 		wlr_scene_buffer_set_backdrop_blur(c->effect_buffer,
 				enabled && config.blur_enabled);
 		wlr_scene_buffer_set_backdrop_blur_optimized(c->effect_buffer,
-				enabled && config.blur_enabled && config.blur_optimized
-						&& c->mon && c->mon->optimized_blur);
+				false);
 		wlr_scene_buffer_set_backdrop_blur_ignore_transparent(c->effect_buffer,
 				config.blur_ignore_transparent);
 	}
@@ -179,8 +178,9 @@ collapsedbuffercreate(Client *c, int width, int height)
 {
 	CollapsedBuffer *buffer;
 	cairo_t *cr;
+	const char *appid = client_get_appid(c);
 	const char *title = client_get_title(c);
-	double baseline;
+	double detail_baseline, title_baseline;
 
 	buffer = ecalloc(1, sizeof(*buffer));
 	buffer->surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
@@ -194,17 +194,25 @@ collapsedbuffercreate(Client *c, int width, int height)
 	cairo_set_source_rgba(cr, 0, 0, 0, 0);
 	cairo_paint(cr);
 	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
-	cairo_rectangle(cr, 8, 0, MAX(1, width - 16), height);
+	cairo_rectangle(cr, 16, 0, MAX(1, width - 32), height);
 	cairo_clip(cr);
-	cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
+	cairo_select_font_face(cr, "Noto Sans", CAIRO_FONT_SLANT_NORMAL,
 			CAIRO_FONT_WEIGHT_NORMAL);
 	cairo_set_font_size(cr, config.collapsed_font_size);
-	cairo_set_source_rgba(cr, config.focuscolor[0], config.focuscolor[1],
-			config.focuscolor[2], config.focuscolor[3]);
-	baseline = (height + config.collapsed_font_size) / 2.0 - 2.0;
-	cairo_move_to(cr, 8, baseline);
-	cairo_show_text(cr, "MINIMIZED  |  ");
+	cairo_set_source_rgba(cr, config.collapsed_title_color[0],
+			config.collapsed_title_color[1], config.collapsed_title_color[2],
+			config.collapsed_title_color[3]);
+	title_baseline = height / 2.0 - 3.0;
+	cairo_move_to(cr, 16, title_baseline);
 	cairo_show_text(cr, title);
+	cairo_set_font_size(cr, MAX(8, config.collapsed_font_size - 3));
+	cairo_set_source_rgba(cr, config.collapsed_detail_color[0],
+			config.collapsed_detail_color[1], config.collapsed_detail_color[2],
+			config.collapsed_detail_color[3]);
+	detail_baseline = height / 2.0 + config.collapsed_font_size + 4.0;
+	cairo_move_to(cr, 16, detail_baseline);
+	cairo_show_text(cr, "Minimized | ");
+	cairo_show_text(cr, appid);
 	cairo_destroy(cr);
 	cairo_surface_flush(buffer->surface);
 	wlr_buffer_init(&buffer->base, &collapsed_buffer_impl, width, height);
@@ -215,47 +223,56 @@ void
 clientcollapsedupdate(Client *c, int redraw)
 {
 	struct wlr_buffer *buffer;
+	float scrim[4];
 	int width, height, label_width, label_height, x, y;
 
 	if (!c || !c->scene || !c->scene_surface)
 		return;
-	wlr_scene_node_set_enabled(&c->scene_surface->node, !c->iscollapsed);
 	if (!c->iscollapsed) {
 		if (c->collapsed_label)
 			wlr_scene_node_destroy(&c->collapsed_label->node);
-		if (c->collapsed_bg)
-			wlr_scene_node_destroy(&c->collapsed_bg->node);
+		if (c->collapsed_scrim)
+			wlr_scene_node_destroy(&c->collapsed_scrim->node);
 		c->collapsed_label = NULL;
-		c->collapsed_bg = NULL;
+		c->collapsed_scrim = NULL;
+		c->collapsed_label_width = c->collapsed_label_height = 0;
 		return;
 	}
-	if (!c->collapsed_bg) {
-		c->collapsed_bg = wlr_scene_rect_create(c->scene, 1, 1,
-				config.rootcolor);
-		c->collapsed_bg->node.data = c;
+	if (!c->collapsed_scrim) {
+		c->collapsed_scrim = wlr_scene_rect_create(c->scene, 1, 1,
+				config.collapsed_scrim);
+		c->collapsed_scrim->node.data = c;
+		c->collapsed_scrim->accepts_input = true;
 	}
+	scrim[0] = config.collapsed_scrim[0] * config.collapsed_scrim[3];
+	scrim[1] = config.collapsed_scrim[1] * config.collapsed_scrim[3];
+	scrim[2] = config.collapsed_scrim[2] * config.collapsed_scrim[3];
+	scrim[3] = config.collapsed_scrim[3];
 	width = MAX(1, c->geom.width - 2 * (int)c->bw);
 	height = MAX(1, c->geom.height - 2 * (int)c->bw);
-	wlr_scene_rect_set_size(c->collapsed_bg, width, height);
-	wlr_scene_rect_set_color(c->collapsed_bg, config.rootcolor);
-	wlr_scene_node_set_position(&c->collapsed_bg->node, c->bw, c->bw);
+	wlr_scene_rect_set_size(c->collapsed_scrim, width, height);
+	wlr_scene_rect_set_color(c->collapsed_scrim, scrim);
+	wlr_scene_node_set_position(&c->collapsed_scrim->node, c->bw, c->bw);
 	label_width = MIN(width, 640);
-	label_height = MIN(height, config.collapsed_font_size + 16);
-	if (c->collapsed_label && (c->collapsed_label->buffer->width != label_width
-			|| c->collapsed_label->buffer->height != label_height))
+	label_height = MIN(height, 2 * config.collapsed_font_size + 24);
+	if (c->collapsed_label && (c->collapsed_label_width != label_width
+			|| c->collapsed_label_height != label_height))
 		redraw = 1;
 	if (redraw && c->collapsed_label) {
 		wlr_scene_node_destroy(&c->collapsed_label->node);
 		c->collapsed_label = NULL;
+		c->collapsed_label_width = c->collapsed_label_height = 0;
 	}
 	if (!c->collapsed_label) {
 		buffer = collapsedbuffercreate(c, label_width, label_height);
 		c->collapsed_label = wlr_scene_buffer_create(c->scene, buffer);
 		wlr_buffer_drop(buffer);
 		c->collapsed_label->node.data = c;
+		c->collapsed_label_width = label_width;
+		c->collapsed_label_height = label_height;
 	}
-	x = c->bw + (width - c->collapsed_label->buffer->width) / 2;
-	y = c->bw + (height - c->collapsed_label->buffer->height) / 2;
+	x = c->bw + (width - c->collapsed_label_width) / 2;
+	y = c->bw + (height - c->collapsed_label_height) / 2;
 	wlr_scene_node_set_position(&c->collapsed_label->node, x, y);
 }
 
@@ -704,7 +721,7 @@ resize(Client *c, struct wlr_box geo, int interact)
 			c->geom.height - 2 * c->bw);
 	client_get_clip(c, &clip);
 	wlr_scene_subsurface_tree_set_clip(&c->scene_surface->node, &clip);
-	if (c->collapsed_bg)
+	if (c->collapsed_scrim)
 		clientcollapsedupdate(c, 0);
 	clientsceneupdate(c);
 }
@@ -828,8 +845,9 @@ unmapnotify(struct wl_listener *listener, void *data)
 	c->border = NULL;
 	c->effect_buffer = NULL;
 	c->shadow = NULL;
-	c->collapsed_bg = NULL;
+	c->collapsed_scrim = NULL;
 	c->collapsed_label = NULL;
+	c->collapsed_label_width = c->collapsed_label_height = 0;
 	printstatus();
 	motionnotify(0, NULL, 0, 0, 0, 0);
 }

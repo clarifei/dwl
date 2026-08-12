@@ -73,6 +73,7 @@ canvasnodecommit(struct wl_listener *listener, void *data)
 	CanvasNodeState *buffer_state = wl_container_of(listener, buffer_state, commit);
 	struct wlr_scene_node *node = &buffer_state->buffer->node;
 	struct wlr_addon *addon;
+	Client *c = NULL;
 	CanvasNodeState *state;
 
 	canvasnodebufferupdate(buffer_state, 1);
@@ -84,6 +85,10 @@ canvasnodecommit(struct wl_listener *listener, void *data)
 			break;
 		node = &node->parent->node;
 	}
+	toplevel_from_wlr_surface(buffer_state->surface, &c, NULL);
+	if (c && buffer_state->surface == client_surface(c)
+			&& clientcanvasscale(c) != 1.0)
+		clientsceneupdate(c);
 }
 
 static void
@@ -434,8 +439,6 @@ arrange(Monitor *m)
 
 	wlr_scene_node_set_enabled(&m->fullscreen_bg->node,
 			(c = focustop(m)) && c->isfullscreen);
-	monitorblurupdate(m);
-
 	strncpy(m->ltsymbol, m->lt[m->sellt]->symbol, LENGTH(m->ltsymbol));
 
 	/* We move all clients (except fullscreen and unmanaged) to LyrTile while
