@@ -8,6 +8,11 @@ typedef struct {
 	struct wl_list link;
 } LinkNode;
 
+typedef struct {
+	struct wl_list link;
+	struct wl_list flink;
+} FocusNode;
+
 static int
 close_enough(double a, double b)
 {
@@ -23,6 +28,8 @@ main(void)
 	double world = canvas_screen_to_world(anchor, origin, pan, 1.0);
 	double zoomed_pan = canvas_zoom_pan(anchor, origin, pan, 1.0, 1.5);
 	double target_pan = canvas_zoom_pan(anchor, origin, -42.0, 1.0, 1.5);
+	double progressive_pan = pan;
+	double progressive_zoom = 1.0;
 	double subpixel_pan = 0.0;
 	CanvasBox fixed[] = {
 		{.x = 0, .y = 0, .width = 100, .height = 100},
@@ -34,6 +41,10 @@ main(void)
 	CanvasBox spawned;
 	struct wl_list links;
 	LinkNode first, second, third;
+	struct wl_list clients, fstack;
+	FocusNode focus_first, focus_second, focus_third;
+	struct wl_list *link;
+	FocusNode *focus;
 
 	assert(close_enough(canvas_pan_delta(12.0, 1.0), 12.0));
 	assert(close_enough(canvas_axis_pan_delta(12.0, 1.0), -12.0));
@@ -43,6 +54,15 @@ main(void)
 
 	assert(close_enough(canvas_world_to_screen(world, origin, pan, 1.0), anchor));
 	assert(close_enough(canvas_world_to_screen(world, origin, zoomed_pan, 1.5), anchor));
+	progressive_pan = canvas_zoom_pan(anchor, origin, progressive_pan,
+			progressive_zoom, 1.25);
+	progressive_zoom = 1.25;
+	progressive_pan = canvas_zoom_pan(anchor, origin, progressive_pan,
+			progressive_zoom, 1.5);
+	progressive_zoom = 1.5;
+	assert(close_enough(canvas_world_to_screen(canvas_screen_to_world(
+			anchor, origin, pan, 1.0), origin, progressive_pan,
+			progressive_zoom), anchor));
 	assert(close_enough(canvas_world_to_screen(
 			canvas_screen_to_world(anchor, origin, -42.0, 1.0),
 			origin, target_pan, 1.5), anchor));
@@ -100,6 +120,24 @@ main(void)
 	assert(canvas_cycle_link(&links, &third.link, 1) == &first.link);
 	assert(canvas_cycle_link(&links, &first.link, 0) == &third.link);
 	assert(canvas_cycle_link(&links, &second.link, 0) == &first.link);
+
+	/* Focus recency may reorder fstack, but Alt+Tab must walk stable clients. */
+	wl_list_init(&clients);
+	wl_list_init(&fstack);
+	wl_list_insert(&clients, &focus_first.link);
+	wl_list_insert(&focus_first.link, &focus_second.link);
+	wl_list_insert(&focus_second.link, &focus_third.link);
+	wl_list_insert(&fstack, &focus_first.flink);
+	wl_list_insert(&focus_first.flink, &focus_second.flink);
+	wl_list_insert(&focus_second.flink, &focus_third.flink);
+	link = canvas_cycle_link(&clients, &focus_first.link, 1);
+	focus = wl_container_of(link, focus, link);
+	assert(focus == &focus_second);
+	wl_list_remove(&focus_second.flink);
+	wl_list_insert(&fstack, &focus_second.flink);
+	link = canvas_cycle_link(&clients, &focus_second.link, 1);
+	focus = wl_container_of(link, focus, link);
+	assert(focus == &focus_third);
 
 	puts("canvas tests passed");
 	return 0;

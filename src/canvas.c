@@ -505,7 +505,7 @@ void
 zoomcanvasby(Monitor *m, double factor)
 {
 	Client *focused;
-	double anchor_x, anchor_y, base_zoom, new_zoom;
+	double base_zoom, new_zoom;
 	int was_active;
 
 	if (!m || !isfinite(factor) || factor <= 0.0
@@ -520,19 +520,10 @@ zoomcanvasby(Monitor *m, double factor)
 		return;
 	if (!was_active)
 		clock_gettime(CLOCK_MONOTONIC, &m->canvas_zoom_frame);
-	anchor_x = m->w.x + m->w.width / 2.0;
-	anchor_y = m->w.y + m->w.height / 2.0;
-	if (was_active) {
-		m->canvas_x_target = canvas_zoom_pan(anchor_x, m->m.x,
-				m->canvas_x_target, base_zoom, new_zoom);
-		m->canvas_y_target = canvas_zoom_pan(anchor_y, m->m.y,
-				m->canvas_y_target, base_zoom, new_zoom);
-	} else {
-		m->canvas_x_target = canvas_zoom_pan(anchor_x, m->m.x,
-				m->canvas_x, m->canvas_zoom, new_zoom);
-		m->canvas_y_target = canvas_zoom_pan(anchor_y, m->m.y,
-				m->canvas_y, m->canvas_zoom, new_zoom);
-	}
+	/* Zoom owns the viewport anchor; do not let an older camera target pull
+	 * the view sideways while the scale is still interpolating. */
+	m->canvas_x_target = m->canvas_x;
+	m->canvas_y_target = m->canvas_y;
 	m->canvas_zoom_target = new_zoom;
 	wlr_output_schedule_frame(m->wlr_output);
 }
@@ -541,9 +532,14 @@ void
 setcanvaszoom(Monitor *m, double zoom)
 {
 	double anchor_x, anchor_y, old_zoom;
+	int pan_target_matches;
 
 	if (!m || zoom == m->canvas_zoom)
 		return;
+	pan_target_matches = fabs(m->canvas_x_target - m->canvas_x)
+			< CANVAS_ZOOM_EPSILON
+			&& fabs(m->canvas_y_target - m->canvas_y)
+			< CANVAS_ZOOM_EPSILON;
 	anchor_x = m->w.x + m->w.width / 2.0;
 	anchor_y = m->w.y + m->w.height / 2.0;
 	old_zoom = m->canvas_zoom;
@@ -552,6 +548,10 @@ setcanvaszoom(Monitor *m, double zoom)
 	m->canvas_y = canvas_zoom_pan(anchor_y, m->m.y, m->canvas_y,
 			old_zoom, zoom);
 	m->canvas_zoom = zoom;
+	if (pan_target_matches) {
+		m->canvas_x_target = m->canvas_x;
+		m->canvas_y_target = m->canvas_y;
+	}
 	updatecanvas(m, 1);
 	motionnotify(0, NULL, 0, 0, 0, 0);
 }
@@ -683,7 +683,7 @@ focusmon(const Arg *arg)
 void
 focusstack(const Arg *arg)
 {
-	/* Focus the next or previous client in focus-recency order. */
+	/* Traverse stable client order; focusclient() reorders fstack on every switch. */
 	Client *c, *sel, *next = NULL;
 	struct wl_list *link;
 
@@ -692,10 +692,10 @@ focusstack(const Arg *arg)
 	sel = focustop(selmon);
 	if (!sel || (sel->isfullscreen && !client_has_children(sel)))
 		return;
-	link = &sel->flink;
-	while ((link = canvas_cycle_link(&fstack, link, arg->i > 0))
-			!= &sel->flink) {
-		c = wl_container_of(link, c, flink);
+	link = &sel->link;
+	while ((link = canvas_cycle_link(&clients, link, arg->i > 0))
+			!= &sel->link) {
+		c = wl_container_of(link, c, link);
 		if (CLIENTON(c, selmon) && !c->iscollapsed) {
 			next = c;
 			break;
