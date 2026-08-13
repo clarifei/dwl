@@ -18,6 +18,25 @@ typedef struct {
 	struct wlr_scene_buffer *buffer;
 } ClientEffectLookup;
 
+#define COLLAPSED_LABEL_TEXT_MAX 512
+
+static void
+collapsedlabeltext(char dst[static COLLAPSED_LABEL_TEXT_MAX], const char *src)
+{
+	size_t length = 0;
+
+	if (src) {
+		length = strnlen(src, COLLAPSED_LABEL_TEXT_MAX - 1);
+		/* Avoid splitting a UTF-8 sequence when truncating. */
+		if (src[length] != '\0') {
+			while (length > 0 && (((unsigned char)src[length] & 0xC0) == 0x80))
+				length--;
+		}
+	}
+	memcpy(dst, src ? src : "", length);
+	dst[length] = '\0';
+}
+
 static void
 clienteffectbuffer(struct wlr_scene_buffer *buffer, int sx, int sy, void *data)
 {
@@ -214,7 +233,12 @@ collapsedbuffercreate(Client *c, int width, int height)
 	cairo_t *cr;
 	const char *appid = client_get_appid(c);
 	const char *title = client_get_title(c);
+	char appid_text[COLLAPSED_LABEL_TEXT_MAX];
+	char title_text[COLLAPSED_LABEL_TEXT_MAX];
 	double detail_baseline, title_baseline;
+
+	collapsedlabeltext(appid_text, appid);
+	collapsedlabeltext(title_text, title);
 
 	buffer = ecalloc(1, sizeof(*buffer));
 	buffer->surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
@@ -238,7 +262,7 @@ collapsedbuffercreate(Client *c, int width, int height)
 			config.collapsed_title_color[3]);
 	title_baseline = height / 2.0 - 3.0;
 	cairo_move_to(cr, 16, title_baseline);
-	cairo_show_text(cr, title);
+	cairo_show_text(cr, title_text);
 	cairo_set_font_size(cr, MAX(8, config.collapsed_font_size - 3));
 	cairo_set_source_rgba(cr, config.collapsed_detail_color[0],
 			config.collapsed_detail_color[1], config.collapsed_detail_color[2],
@@ -246,7 +270,7 @@ collapsedbuffercreate(Client *c, int width, int height)
 	detail_baseline = height / 2.0 + config.collapsed_font_size + 4.0;
 	cairo_move_to(cr, 16, detail_baseline);
 	cairo_show_text(cr, "Minimized | ");
-	cairo_show_text(cr, appid);
+	cairo_show_text(cr, appid_text);
 	cairo_destroy(cr);
 	cairo_surface_flush(buffer->surface);
 	wlr_buffer_init(&buffer->base, &collapsed_buffer_impl, width, height);

@@ -35,9 +35,15 @@ createlocksurface(struct wl_listener *listener, void *data)
 {
 	SessionLock *lock = wl_container_of(listener, lock, new_surface);
 	struct wlr_session_lock_surface_v1 *lock_surface = data;
-	Monitor *m = lock_surface->output->data;
-	struct wlr_scene_tree *scene_tree = lock_surface->surface->data
-			= wlr_scene_subsurface_tree_create(lock->scene, lock_surface->surface);
+	Monitor *m;
+	struct wlr_scene_tree *scene_tree;
+
+	if (!lock_surface->output || !(m = lock_surface->output->data)) {
+		wlr_session_lock_surface_v1_destroy(lock_surface);
+		return;
+	}
+	scene_tree = lock_surface->surface->data = wlr_scene_subsurface_tree_create(
+			lock->scene, lock_surface->surface);
 	m->lock_surface = lock_surface;
 
 	wlr_scene_node_set_position(&scene_tree->node, m->m.x, m->m.y);
