@@ -38,8 +38,8 @@ static int
 config_reload_allowed(void)
 {
 	struct timespec now;
-	long sec_diff, nsec_diff;
-
+	time_t sec_diff;
+	long nsec_diff;
 	if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
 		return 1;
 	sec_diff = now.tv_sec - config_last_reload.tv_sec;
