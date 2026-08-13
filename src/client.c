@@ -25,8 +25,14 @@ collapsedlabeltext(char dst[static COLLAPSED_LABEL_TEXT_MAX], const char *src)
 {
 	size_t length = 0;
 
-	if (src)
+	if (src) {
 		length = strnlen(src, COLLAPSED_LABEL_TEXT_MAX - 1);
+		/* Avoid splitting a UTF-8 sequence when truncating. */
+		if (src[length] != '\0') {
+			while (length > 0 && (((unsigned char)src[length] & 0xC0) == 0x80))
+				length--;
+		}
+	}
 	memcpy(dst, src ? src : "", length);
 	dst[length] = '\0';
 }
