@@ -29,9 +29,30 @@ static struct wl_event_source *config_source;
 static char *config_file;
 static char *config_dir;
 static char *config_name;
+static struct timespec config_last_reload;
 
 static void config_apply_live(void);
 static void config_reload(void);
+
+static int
+config_reload_allowed(void)
+{
+	struct timespec now;
+	long sec_diff, nsec_diff;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
+		return 1;
+	sec_diff = now.tv_sec - config_last_reload.tv_sec;
+	nsec_diff = now.tv_nsec - config_last_reload.tv_nsec;
+	if (nsec_diff < 0) {
+		sec_diff--;
+		nsec_diff += 1000000000L;
+	}
+	if (sec_diff < 0 || (sec_diff == 0 && nsec_diff < 150000000L))
+		return 0;
+	config_last_reload = now;
+	return 1;
+}
 
 static char *
 config_strdup(const char *value)
@@ -1239,10 +1260,12 @@ config_parse_file(const char *path, Config *next)
 		error = lua_tostring(lua, -1);
 		fprintf(stderr, "inca: config %s: %s\n", path,
 				error ? error : "unknown Lua error");
+		lua_settop(lua, 0);
 		lua_close(lua);
 		config_free(next);
 		return -1;
 	}
+	lua_settop(lua, 0);
 	lua_close(lua);
 	return 0;
 }
@@ -1327,19 +1350,28 @@ static int
 config_inotify(int fd, uint32_t mask, void *data)
 {
 	char buffer[4096];
-	char *offset;
+	size_t offset, event_size;
 	ssize_t length;
 	struct inotify_event *event;
 
 	(void)mask;
 	(void)data;
 	while ((length = read(fd, buffer, sizeof(buffer))) > 0) {
-		for (offset = buffer; offset < buffer + length;
-				offset += sizeof(*event) + event->len) {
-			event = (struct inotify_event *)offset;
-			if (event->len && !strcmp(event->name, config_name)
-					&& !(event->mask & IN_ISDIR))
+		offset = 0;
+		while (offset < (size_t)length) {
+			if ((size_t)length - offset < sizeof(*event))
+				break;
+			event = (struct inotify_event *)(buffer + offset);
+			event_size = sizeof(*event) + event->len;
+			if (event_size > (size_t)length - offset)
+				break;
+			if (event->len && !(event->mask & IN_ISDIR)
+					&& !strcmp(event->name, config_name)
+					&& config_reload_allowed()) {
 				config_reload();
+				break;
+			}
+			offset += event_size;
 		}
 	}
 	return 0;

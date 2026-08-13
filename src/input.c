@@ -265,9 +265,13 @@ void
 cursorwarptohint(void)
 {
 	Client *c = NULL;
-	double sx = active_constraint->current.cursor_hint.x;
-	double sy = active_constraint->current.cursor_hint.y;
+	double sx, sy;
 	double x, y;
+
+	if (!active_constraint || !active_constraint->surface || !active_constraint->seat)
+		return;
+	sx = active_constraint->current.cursor_hint.x;
+	sy = active_constraint->current.cursor_hint.y;
 
 	toplevel_from_wlr_surface(active_constraint->surface, &c, NULL);
 	if (c && active_constraint->current.cursor_hint.enabled) {
@@ -545,6 +549,10 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 
 		if (active_constraint && cursor_mode != CurResize && cursor_mode != CurMove
 				&& cursor_mode != CurPan) {
+			if (!active_constraint->surface) {
+				active_constraint = NULL;
+				goto move_cursor;
+			}
 			toplevel_from_wlr_surface(active_constraint->surface, &c, NULL);
 			if (c && active_constraint->surface == seat->pointer_state.focused_surface) {
 				x = cursor->x;
@@ -568,6 +576,7 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 			}
 		}
 
+move_cursor:
 		wlr_cursor_move(cursor, device, dx, dy);
 		wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
 
