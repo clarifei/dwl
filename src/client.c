@@ -15,19 +15,8 @@ typedef struct {
 
 typedef struct {
 	Client *client;
-	struct wlr_scene_buffer *buffer;
-} ClientEffectLookup;
-
-static void
-clienteffectbuffer(struct wlr_scene_buffer *buffer, int sx, int sy, void *data)
-{
-	ClientEffectLookup *lookup = data;
-	struct wlr_scene_surface *surface = wlr_scene_surface_try_from_buffer(buffer);
-
-	if (!lookup->buffer && surface
-			&& surface->surface == client_surface(lookup->client))
-		lookup->buffer = buffer;
-}
+	double scale;
+} ClientEffectUpdate;
 
 static void
 clientbordergeometry(Client *c, double scale)
@@ -102,11 +91,53 @@ clientshadowgeometry(Client *c, double scale)
 		wlr_scene_shadow_set_clipped_region(c->shadow, clip);
 }
 
+static enum corner_location
+clientbuffercorners(Client *c, struct wlr_scene_buffer *buffer, double scale)
+{
+	struct wlr_scene_surface *scene_surface;
+	int content_x, content_y, content_width, content_height;
+	int buffer_x, buffer_y, buffer_width, buffer_height;
+	enum corner_location corners = CORNER_LOCATION_NONE;
+
+	scene_surface = buffer ? wlr_scene_surface_try_from_buffer(buffer) : NULL;
+	if (!c || !c->scene_surface || !scene_surface
+			|| wlr_surface_get_root_surface(scene_surface->surface)
+					!= client_surface(c)
+			|| !wlr_scene_node_coords(&c->scene_surface->node,
+					&content_x, &content_y)
+			|| !wlr_scene_node_coords(&buffer->node, &buffer_x, &buffer_y))
+		return CORNER_LOCATION_NONE;
+	content_width = MAX(0, (int)round((c->geom.width - 2 * (int)c->bw) * scale));
+	content_height = MAX(0, (int)round((c->geom.height - 2 * (int)c->bw) * scale));
+	buffer_width = buffer->dst_width;
+	buffer_height = buffer->dst_height;
+	if (!buffer_width && buffer->buffer)
+		buffer_width = buffer->buffer->width;
+	if (!buffer_height && buffer->buffer)
+		buffer_height = buffer->buffer->height;
+	if (content_width <= 0 || content_height <= 0
+			|| buffer_width <= 0 || buffer_height <= 0)
+		return CORNER_LOCATION_NONE;
+	if (buffer_x == content_x && buffer_y == content_y)
+		corners |= CORNER_LOCATION_TOP_LEFT;
+	if (buffer_x + buffer_width == content_x + content_width
+			&& buffer_y == content_y)
+		corners |= CORNER_LOCATION_TOP_RIGHT;
+	if (buffer_x + buffer_width == content_x + content_width
+			&& buffer_y + buffer_height == content_y + content_height)
+		corners |= CORNER_LOCATION_BOTTOM_RIGHT;
+	if (buffer_x == content_x
+			&& buffer_y + buffer_height == content_y + content_height)
+		corners |= CORNER_LOCATION_BOTTOM_LEFT;
+	return corners;
+}
+
 void
 clientbufferfxupdate(Client *c, struct wlr_scene_buffer *buffer, double scale)
 {
 	float opacity;
-	int enabled, focused, radius;
+	int buffer_height, buffer_width, enabled, focused, radius;
+	enum corner_location corners;
 
 	if (!c || !buffer)
 		return;
@@ -115,14 +146,23 @@ clientbufferfxupdate(Client *c, struct wlr_scene_buffer *buffer, double scale)
 	radius = enabled ? MIN((int)round(config.corner_radius * scale),
 			MIN(MAX(0, (int)round((c->geom.width - 2 * (int)c->bw) * scale)),
 					MAX(0, (int)round((c->geom.height - 2 * (int)c->bw) * scale))) / 2) : 0;
+	buffer_width = buffer->dst_width ? buffer->dst_width
+		: buffer->buffer ? buffer->buffer->width : 0;
+	buffer_height = buffer->dst_height ? buffer->dst_height
+		: buffer->buffer ? buffer->buffer->height : 0;
+	corners = radius ? clientbuffercorners(c, buffer, scale) : CORNER_LOCATION_NONE;
+	if (corners)
+		radius = MIN(radius, MIN(buffer_width, buffer_height) / 2);
+	else
+		radius = 0;
 	opacity = config.opacity_enabled && enabled
 			? (focused ? config.opacity_active : config.opacity_inactive) : 1.0f;
 	if (buffer->opacity != opacity)
 		wlr_scene_buffer_set_opacity(buffer, opacity);
 	if (buffer->corner_radius != radius
-			|| buffer->corners != (radius ? CORNER_LOCATION_ALL : CORNER_LOCATION_NONE))
+			|| buffer->corners != corners)
 		wlr_scene_buffer_set_corner_radius(buffer, radius,
-				radius ? CORNER_LOCATION_ALL : CORNER_LOCATION_NONE);
+				corners);
 	if (buffer->backdrop_blur != (enabled && config.blur_enabled))
 		wlr_scene_buffer_set_backdrop_blur(buffer,
 				enabled && config.blur_enabled);
@@ -133,24 +173,33 @@ clientbufferfxupdate(Client *c, struct wlr_scene_buffer *buffer, double scale)
 				config.blur_ignore_transparent);
 }
 
+static void
+clienteffectbuffer(struct wlr_scene_buffer *buffer, int sx, int sy, void *data)
+{
+	ClientEffectUpdate *update = data;
+	struct wlr_scene_surface *surface = wlr_scene_surface_try_from_buffer(buffer);
+	Client *client = NULL;
+
+	if (surface
+			&& toplevel_from_wlr_surface(surface->surface, &client, NULL)
+				== SceneClient && client == update->client)
+		clientbufferfxupdate(update->client, buffer, update->scale);
+}
+
 void
 clienteffectsupdate(Client *c)
 {
-	ClientEffectLookup lookup;
+	ClientEffectUpdate update;
 	double scale;
 	int enabled;
 
 	if (!c || !c->scene)
 		return;
-	if (!c->effect_buffer) {
-		lookup = (ClientEffectLookup){.client = c};
-		wlr_scene_node_for_each_buffer(&c->scene_surface->node,
-				clienteffectbuffer, &lookup);
-		c->effect_buffer = lookup.buffer;
-	}
 	enabled = !c->isfullscreen;
 	scale = clientcanvasscale(c);
-	clientbufferfxupdate(c, c->effect_buffer, scale);
+	update = (ClientEffectUpdate){.client = c, .scale = scale};
+	wlr_scene_node_for_each_buffer(&c->scene->node,
+			clienteffectbuffer, &update);
 	clientbordergeometry(c, scale);
 	if (!config.shadow_enabled && c->shadow) {
 		wlr_scene_node_destroy(&c->shadow->node);
@@ -864,7 +913,6 @@ unmapnotify(struct wl_listener *listener, void *data)
 
 	wlr_scene_node_destroy(&c->scene->node);
 	c->border = NULL;
-	c->effect_buffer = NULL;
 	c->shadow = NULL;
 	c->collapsed_scrim = NULL;
 	c->collapsed_label = NULL;

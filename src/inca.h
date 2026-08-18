@@ -123,7 +123,6 @@ typedef struct {
 	struct wlr_scene_tree *scene;
 	struct wlr_scene_rect *border;
 	struct wlr_scene_tree *scene_surface;
-	struct wlr_scene_buffer *effect_buffer;
 	struct wlr_scene_shadow *shadow;
 	struct wlr_scene_rect *collapsed_scrim;
 	struct wlr_scene_buffer *collapsed_label;

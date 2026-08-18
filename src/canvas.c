@@ -92,7 +92,7 @@ canvasnodecommit(struct wl_listener *listener, void *data)
 		node = &node->parent->node;
 	}
 	toplevel_from_wlr_surface(buffer_state->surface, &c, NULL);
-	if (c && buffer_state->surface == client_surface(c)) {
+	if (c) {
 		if (clientcanvasscale(c) != 1.0)
 			clientsceneupdate(c);
 		else
