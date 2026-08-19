@@ -317,7 +317,7 @@ extern Config config;
 
 /* Shared compositor state. It lives in runtime.c; modules only depend on it
  * through this header, so their implementation files compile independently. */
-extern pid_t child_pid;
+extern volatile sig_atomic_t child_pid;
 extern int locked;
 extern void *exclusive_focus;
 extern struct wl_display *dpy;

@@ -9,13 +9,14 @@ cleanup(void)
 	config_watch_stop();
 	cleanuplisteners();
 	wl_display_destroy_clients(dpy);
-	if (child_pid > 0) {
-		pid_t pid = waitpid(child_pid, NULL, WNOHANG);
-		if (pid == 0) {
-			kill(-child_pid, SIGTERM);
-			waitpid(child_pid, NULL, 0);
+	pid_t pid = child_pid;
+	child_pid = -1;
+	if (pid > 0) {
+		pid_t result = waitpid(pid, NULL, WNOHANG);
+		if (result == 0) {
+			kill(-pid, SIGTERM);
+			waitpid(pid, NULL, 0);
 		}
-		child_pid = -1;
 	}
 	wlr_xcursor_manager_destroy(cursor_mgr);
 	wlr_cursor_destroy(cursor);

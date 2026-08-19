@@ -1,7 +1,7 @@
 /* Inca! shared compositor state and event listeners. */
 #include "inca.h"
 
-pid_t child_pid = -1;
+volatile sig_atomic_t child_pid = -1;
 int locked;
 void *exclusive_focus;
 struct wl_display *dpy;
