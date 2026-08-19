@@ -13,7 +13,7 @@
 
 typedef struct {
 	bool compositor;
-	bool layer_shell;
+	uint32_t layer_shell_version;
 	bool output;
 	bool seat;
 	bool xdg_shell;
@@ -160,7 +160,7 @@ global(void *data, struct wl_registry *registry, uint32_t name,
 		globals->xdg_wm_base = wl_registry_bind(registry, name,
 				&xdg_wm_base_interface, 1);
 	else if (!strcmp(interface, "zwlr_layer_shell_v1"))
-		globals->layer_shell = true;
+		globals->layer_shell_version = version;
 	globals->compositor = globals->wl_compositor != NULL;
 	globals->xdg_shell = globals->xdg_wm_base != NULL;
 }
@@ -229,9 +229,9 @@ main(void)
 	if (wl_registry_add_listener(registry, &listener, &globals) < 0
 			|| wl_display_roundtrip(display) < 0)
 		goto done;
-	if (!globals.compositor || !globals.layer_shell || !globals.output
+	if (!globals.compositor || globals.layer_shell_version < 5 || !globals.output
 			|| !globals.seat || !globals.xdg_shell || !globals.wl_shm) {
-		fprintf(stderr, "missing required Wayland globals\n");
+		fprintf(stderr, "missing required Wayland globals or layer-shell v5\n");
 		goto done;
 	}
 	if (xdg_wm_base_add_listener(globals.xdg_wm_base, &wm_base_listener,

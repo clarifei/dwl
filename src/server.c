@@ -300,7 +300,7 @@ setup(void)
 	wl_signal_add(&xdg_shell->events.new_toplevel, &new_xdg_toplevel);
 	wl_signal_add(&xdg_shell->events.new_popup, &new_xdg_popup);
 
-	layer_shell = wlr_layer_shell_v1_create(dpy, 3);
+	layer_shell = wlr_layer_shell_v1_create(dpy, 5);
 	wl_signal_add(&layer_shell->events.new_surface, &new_layer_surface);
 
 	idle_notifier = wlr_idle_notifier_v1_create(dpy);
