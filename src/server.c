@@ -10,8 +10,12 @@ cleanup(void)
 	cleanuplisteners();
 	wl_display_destroy_clients(dpy);
 	if (child_pid > 0) {
-		kill(-child_pid, SIGTERM);
-		waitpid(child_pid, NULL, 0);
+		pid_t pid = waitpid(child_pid, NULL, WNOHANG);
+		if (pid == 0) {
+			kill(-child_pid, SIGTERM);
+			waitpid(child_pid, NULL, 0);
+		}
+		child_pid = -1;
 	}
 	wlr_xcursor_manager_destroy(cursor_mgr);
 	wlr_cursor_destroy(cursor);
@@ -97,8 +101,14 @@ gpureset(struct wl_listener *listener, void *data)
 void
 handlesig(int signo)
 {
-	if (signo == SIGCHLD)
-		while (waitpid(-1, NULL, WNOHANG) > 0);
+	pid_t pid;
+
+	if (signo == SIGCHLD) {
+		while ((pid = waitpid(-1, NULL, WNOHANG)) > 0) {
+			if (pid == child_pid)
+				child_pid = -1;
+		}
+	}
 	else if (signo == SIGINT || signo == SIGTERM)
 		quit(NULL);
 }
